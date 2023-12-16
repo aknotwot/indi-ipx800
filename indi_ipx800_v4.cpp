@@ -305,15 +305,35 @@ bool Ipx800_v4::initProperties()
 	
 	//suppression open/close
 	// DON'T WORK
-	INDI::Dome::deleteProperty(DomeMotionSP.name);
-	
+	//INDI::Dome::deleteProperty(DomeMotionSP.name);
+	//tcpConnection = new Connection::TCP(this);
+    //tcpConnection->registerHandshake([&]() { return Handshake(); });
+    //tcpConnection->establishConnection(Connection::Serial::B_57600);
+    //serialConnection->setDefaultPort("/dev/ttyACM0");
+    //registerConnection(tcpConnection);
 	//
 	return true;
 }
 
+bool Ipx800_v4::Handshake()
+{
+    if (isSimulation())
+    {
+        LOGF_INFO("Connected successfuly to simulated %s.", getDeviceName());
+        return true;
+    }
+
+    // TODO: Any initial communciation needed with our device; we have an active
+    // connection with a valid file descriptor called PortFD. This file descriptor
+    // can be used with the tty_* functions in indicom.h
+
+    return true;
+}
+
+
 /*
 void Ipx800_v4::ISGetProperties (const char *dev) {
-
+Ipx800_v4
 	DefaultDevice::ISGetProperties(dev);
 	LOG_DEBUG("ISGetProperties loading....");
 	loadConfig(&DigitalInputSP);

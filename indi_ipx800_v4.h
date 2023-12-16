@@ -22,9 +22,9 @@ along with IPX800 V4  INDI Driver.  If not, see
 #pragma once
 
 #include "indidome.h"
-//#include "libindi/roll_off.h"
+ 
 class Ipx800_v4 : public INDI::Dome
-//class Ipx800_v4 : public RollOff
+ 
 {
   public:
   
@@ -33,6 +33,7 @@ class Ipx800_v4 : public INDI::Dome
 	
 	virtual bool initProperties() override;
 	bool updateProperties() override;
+	bool Handshake();
 	virtual const char *getDefaultName() override;
     virtual bool ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n) override;
     virtual bool ISNewText(const char *dev, const char *name, char *texts[], char *names[], int n) override;
