@@ -2,22 +2,27 @@
 This file is part of the IPX800 V4 INDI Driver.
 A driver for the IPX800 (GCE - http : //www.aagware.eu/)
 
-Copyright (C) 2022 Arnaud Dupont (aknotwot@protonmail.com)
+Copyright (C) 2024 Arnaud Dupont (aknotwot@protonmail.com)
 
 IPX800 V4 INDI Driver is free software : you can redistribute it
-and / or modify it under the terms of the GNU General Public License as
+and / or modify it under the terms of the GNU Lesser General Public License as
 published by the Free Software Foundation, either version 3 of the License,
 or (at your option) any later version.
 
 IPX800 V4  INDI Driver is distributed in the hope that it will be
 useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+GNU Lesser General Public License for more details.
 
-You should have received a copy of the GNU General Public License
+You should have received a copy of the Lesser GNU General Public License
 along with IPX800 V4  INDI Driver.  If not, see
 < http : //www.gnu.org/licenses/>.
 
+This driver is adapted from RollOff ino drivers developped by Jasem Mutlaq.
+The main purpose of this driver is to connect to IPX to driver, communicate, and manage 
+opening and closing of roof. 
+It is able to read IPX800 digital datas to check status and position of the roof.
+User can select, partially, for this first release, how IPX 800 is configured 
 *******************************************************************************/
 
 #include "indi_ipx800_v4.h"
@@ -48,12 +53,22 @@ along with IPX800 V4  INDI Driver.  If not, see
 #include <unistd.h>
 
 
+#define ROLLOFF_DURATION 30 // 30 seconds until roof is fully opened or closed
+#define DEFAULT_POLLING_TIMER 2000
+
+// Read only
+#define ROOF_OPENED_SWITCH 0
+#define ROOF_CLOSED_SWITCH 1
+
+// Write only
+#define ROOF_OPEN_RELAY     "OPEN"
+#define ROOF_CLOSE_RELAY    "CLOSE"
+#define ROOF_ABORT_RELAY    "ABORT"
+
 // We declare an auto pointer to ipx800_v4.
 std::unique_ptr<Ipx800_v4> ipx800v4(new Ipx800_v4());
 
-#define ROLLOFF_DURATION 20 // 20 seconds until roof is fully opened or closed
-#define DEFAULT_POLLING_TIMER 2000
-
+void ISPoll(void *p);
 
 /*************************************************************************/
 /** Constructor                                                         **/
@@ -64,7 +79,7 @@ Ipx800_v4::Ipx800_v4()
     LOG_INFO("Setting Capabilities...");
     //Forcer les particularités du DOME
     SetDomeCapability(DOME_CAN_ABORT | DOME_CAN_PARK);
-    //Abort for emergency only. S/OFF power
+    
 	//Connection Ethernet obligatoire
     setDomeConnection(CONNECTION_TCP);
 	setDomeState(DOME_UNKNOWN);
@@ -77,21 +92,23 @@ Ipx800_v4::Ipx800_v4()
 	//IPXDigitalRead = UNUSED_DIGIT;
 	//initialiser les variables dans le .H 
 	
-	//LOG_INFO("Delete Property...");
-	//INDI::Dome::deleteProperty(DomeMotionSP.name);
     LOG_INFO("Capabilities Set...");
 	setVersion(IPX800_V4_VERSION_MAJOR,IPX800_V4_VERSION_MINOR);
 }
 
-
-/*************************************************************************/
-/** DeConstructor                                                         **/
-/*************************************************************************/
-/*
-Ipx800_v4::~Ipx800_v4()
+void ISGetProperties(const char *dev)
 {
-	INDI::Dome::~Dome();
-}*/
+    ipx800v4->ISGetProperties(dev);
+}
+
+void Ipx800_v4::ISGetProperties(const char *dev)
+{
+    INDI::Dome::ISGetProperties(dev);
+
+    //Load Sync position
+    defineProperty(&RoofTimeoutNP);
+    //loadConfig(true, "ENCODER_TICKS");
+}
 
 /************************************************************************************
 *
@@ -103,10 +120,20 @@ bool Ipx800_v4::initProperties()
 	INDI::Dome::initProperties();
 	//buildSkeleton("indi_ipx800v4_sk.xml");
     SetParkDataType(PARK_NONE);
-    addDebugControl();
+    addDebugControl(); 
+    addAuxControls();         // This is for standard controls not the local auxiliary switch
 	addConfigurationControl();
 	//setDebug(true);
 	
+	IUFillLight(&RoofStatusL[ROOF_STATUS_OPENED], "ROOF_OPENED", "Opened", IPS_IDLE);
+    IUFillLight(&RoofStatusL[ROOF_STATUS_CLOSED], "ROOF_CLOSED", "Closed", IPS_IDLE);
+    IUFillLight(&RoofStatusL[ROOF_STATUS_MOVING], "ROOF_MOVING", "Moving", IPS_IDLE);
+    IUFillLightVector(&RoofStatusLP, RoofStatusL, 5, getDeviceName(), "ROOF STATUS", "Roof Status", MAIN_CONTROL_TAB, IPS_BUSY);
+
+	IUFillNumber(&RoofTimeoutN[0], "ROOF_TIMEOUT", "Timeout in Seconds", "%3.0f", 1, 300, 1, 15);
+    IUFillNumberVector(&RoofTimeoutNP, RoofTimeoutN, 1, getDeviceName(), "ROOF_MOVEMENT", "Roof Movement", OPTIONS_TAB, IP_RW,
+                       60, IPS_IDLE);
+
     //creation liste deroulante Relais
     IUFillSwitch(&RelaisInfoS[0], "Unused", "",ISS_ON);
     IUFillSwitch(&RelaisInfoS[1], "Roof Engine Power", "", ISS_OFF);
@@ -207,7 +234,7 @@ bool Ipx800_v4::initProperties()
     }
 
     //champ de gestion du mot de passe
-		defineProperty(&LoginPwdTP);
+	defineProperty(&LoginPwdTP);
 
     ///////////////////////////////////////////////
     //Page de presentation de l'état des relais
@@ -297,92 +324,178 @@ bool Ipx800_v4::initProperties()
                      IP_RO,ISR_1OFMANY, 60, IPS_IDLE);
     IUFillSwitchVector(&DigitsStatesSP[7], Digit8StateS, 2, getDeviceName(), "DIGIT_8_STATE", "Digital 8", RAW_DATA_TAB,
                      IP_RO,ISR_1OFMANY, 60, IPS_IDLE);
-	//commentaire dans le code du dome - weather gere dans le driver du watchdog
-	//IDSnoopDevice("Wheather Watcher", "WEATHER_STATUS");
-	//IDSnoopDevice("Telescope", "TELESCOPE_PARK");
-	// gros doute sur le nom de la device "TELESCOPE"
-	setDefaultPollingPeriod(2000);
 	
-	//suppression open/close
-	// DON'T WORK
-	//INDI::Dome::deleteProperty(DomeMotionSP.name);
-	//tcpConnection = new Connection::TCP(this);
-    //tcpConnection->registerHandshake([&]() { return Handshake(); });
-    //tcpConnection->establishConnection(Connection::Serial::B_57600);
-    //serialConnection->setDefaultPort("/dev/ttyACM0");
-    //registerConnection(tcpConnection);
-	//
+	setDefaultPollingPeriod(2000);
+		
+			
+		
 	return true;
 }
 
 bool Ipx800_v4::Handshake()
 {
+	bool status = false;
     if (isSimulation())
     {
         LOGF_INFO("Connected successfuly to simulated %s.", getDeviceName());
         return true;
     }
-
+	if (PortFD <= 0)
+        DEBUG(INDI::Logger::DBG_WARNING, "The connection port has not been established");
+    else
+    {	
+		/* TODO 
+        if (!(status = initialContact()))
+        {
+            DEBUG(INDI::Logger::DBG_WARNING, "Initial controller contact failed, retrying");
+            msSleep(1000);              // In case it is a Arduino still resetting from upload
+            status = initialContact();
+        }
+        if (!status)
+            LOG_ERROR("Unable to contact the roof controller");
+		*/
+		status = true;
+    }
     // TODO: Any initial communciation needed with our device; we have an active
     // connection with a valid file descriptor called PortFD. This file descriptor
     // can be used with the tty_* functions in indicom.h
 
-    return true;
+    return status;
 }
 
-
-/*
-void Ipx800_v4::ISGetProperties (const char *dev) {
-Ipx800_v4
-	DefaultDevice::ISGetProperties(dev);
-	LOG_DEBUG("ISGetProperties loading....");
-	loadConfig(&DigitalInputSP);
-	loadConfig(&RelaisInfoSP);
+void ISSnoopDevice(XMLEle *root)
+{
+    ipx800v4->ISSnoopDevice(root);
 }
-*/
-
 
 bool Ipx800_v4::ISSnoopDevice(XMLEle *root)
 {
-	/*LOG_INFO("SNOOP...");
-	const char *propName = findXMLAttValu(root, "device");
-	LOGF_DEBUG("Snooping device : %s",propName );
-   */
-    /*if (isConnected())
-    {
-        bool rc = false;
-
-        //rc = updateIPXData();
-        //ssetObsStatus();
-    }*/
     return INDI::Dome::ISSnoopDevice(root);
 }
 
-bool Ipx800_v4::SetupParms()
-{
-   LOG_DEBUG("Setting Params...");
+/********************************************************************************************
+** Establish conditions on a connect.
+*********************************************************************************************/
+bool Ipx800_v4::setupParams()
+{	
+    LOG_DEBUG("Setting Params...");
+    updateRoofStatus();
+    Dome::DomeState curState = getDomeState();
+    switch (curState)
+    {
+        case DOME_UNKNOWN:
+            DEBUG(INDI::Logger::DBG_SESSION, "Dome state: DOME_UNKNOWN");
+            break;
+        case    DOME_ERROR:
+            DEBUG(INDI::Logger::DBG_SESSION, "Dome state: DOME_ERROR");
+            break;
+        case DOME_IDLE:
+            DEBUG(INDI::Logger::DBG_SESSION, "Dome state: DOME_IDLE ");
+            break;
+        case     DOME_MOVING:
+            DEBUG(INDI::Logger::DBG_SESSION, "Dome state: DOME_MOVING");
+            break;
+        case     DOME_SYNCED:
+            DEBUG(INDI::Logger::DBG_SESSION, "Dome state: DOME_SYNCED");
+            break;
+        case     DOME_PARKING:
+            DEBUG(INDI::Logger::DBG_SESSION, "Dome state: DOME_PARKING");
+            break;
+        case    DOME_UNPARKING:
+            DEBUG(INDI::Logger::DBG_SESSION, "Dome state: DOME_UNPARKING");
+            break;
+        case    DOME_PARKED:
+            if (isParked())
+            {
+                DEBUG(INDI::Logger::DBG_SESSION, "Dome state: DOME_PARKED");
+            }
+            else
+            {
+                DEBUG(INDI::Logger::DBG_SESSION, "Dome state is DOME_PARKED but Dome status is unparked");
+            }
+            break;
+        case    DOME_UNPARKED:
+            if (!isParked())
+            {
+                DEBUG(INDI::Logger::DBG_SESSION, "Dome state: DOME_UNPARKED");
+            }
+            else
+            {
+                DEBUG(INDI::Logger::DBG_SESSION, "Dome state is DOME_UNPARKED but Dome status is parked");
+            }
+            break;
+
+    }
+   
+   // TODO
+   // if (isParked())
+    // {
+        // if (fullyOpenedLimitSwitch == ISS_ON)
+        // {
+            // SetParked(false);
+        // }
+        // else if (fullyClosedLimitSwitch == ISS_OFF)
+        // {
+            // DEBUG(INDI::Logger::DBG_WARNING, "Dome indicates it is parked but roof closed switch not set, manual intervention needed");
+        // }
+        // else
+        // {
+           // When Dome status agrees with roof status (closed), but Dome state differs, set Dome state to parked
+            // if (curState != DOME_PARKED)
+            // {
+                // DEBUG(INDI::Logger::DBG_SESSION, "Setting Dome state to DOME_PARKED.");
+                // setDomeState(DOME_PARKED);
+            // }
+        // }
+    // }
+    // else
+    // {
+        // if (fullyClosedLimitSwitch == ISS_ON)
+        // {
+            // SetParked(true);
+        // }
+        // else if (fullyOpenedLimitSwitch == ISS_OFF)
+        // {
+            // DEBUG(INDI::Logger::DBG_WARNING,
+                  // "Dome indicates it is unparked but roof open switch is not set, manual intervention needed");
+        // }
+        // else
+           // When Dome status agrees with roof status (open), but Dome state differs, set Dome state to unparked
+        // {
+            // if (curState != DOME_UNPARKED)
+            // {
+                // DEBUG(INDI::Logger::DBG_SESSION, "Setting Dome state to DOME_UNPARKED.");
+                // setDomeState(DOME_UNPARKED);
+            // }
+        // }
+    // }
    // If we have parking data
-   if (InitPark())
-    {
-        if (isParked())
-        {
-            fullOpenLimitSwitch   = ISS_OFF;
-            fullClosedLimitSwitch = ISS_ON;
-        }
-        else
-        {
-            fullOpenLimitSwitch   = ISS_ON;
-            fullClosedLimitSwitch = ISS_OFF;
-        }
-    }
-    // If we don't have parking data
-    else
-    {
-        fullOpenLimitSwitch   = ISS_OFF;
-        fullClosedLimitSwitch = ISS_OFF;
-    }
+   // if (InitPark())
+    // {
+        // if (isParked())
+        // {
+            // fullOpenLimitSwitch   = ISS_OFF;
+            // fullClosedLimitSwitch = ISS_ON;
+        // }
+        // else
+        // {
+            // fullOpenLimitSwitch   = ISS_ON;
+            // fullClosedLimitSwitch = ISS_OFF;
+        // }
+    // }
+    //If we don't have parking data
+    // else
+    // {
+        // fullOpenLimitSwitch   = ISS_OFF;
+        // fullClosedLimitSwitch = ISS_OFF;
+    // }
 
     return true;
+}
+
+void ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n)
+{
+    ipx800v4->ISNewSwitch(dev, name, states, names, n);
 }
 
 bool Ipx800_v4::ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n)
@@ -399,7 +512,7 @@ bool Ipx800_v4::ISNewSwitch(const char *dev, const char *name, ISState *states, 
 	
 	
 	// Make sure the call is for our device, and Fonctions Tab are initialized
-   if(!strcmp(dev,getDeviceName()))
+   if(dev != nullptr && !strcmp(dev,getDeviceName()))
    {
 		for(int i=0;i<8;i++)
 		{
@@ -475,16 +588,19 @@ bool Ipx800_v4::ISNewSwitch(const char *dev, const char *name, ISState *states, 
 		LOG_DEBUG("ISNewSwitch - First Init + UpDate");
 		firstFonctionTabInit();
 		updateIPXData();
-		//first_Start = true;
-	
+			
 		if (infoSet) 
-			setObsStatus();
+			updateObsStatus();
 		
    }
    return INDI::Dome::ISNewSwitch(dev, name, states, names, n);	
 
 }
 
+void ISNewText(const char *dev, const char *name, char *texts[], char *names[], int n)
+{
+    ipx800v4->ISNewText(dev, name, texts, names, n);
+}
 
 bool Ipx800_v4::ISNewText(const char *dev, const char *name, char *texts[], char *names[], int n)
 {
@@ -521,25 +637,42 @@ bool Ipx800_v4::ISNewText(const char *dev, const char *name, char *texts[], char
     //return RollOff::ISNewText(dev, name, texts, names, n);
   }
 
+void ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n)
+{
+    rollOffIno->ISNewNumber(dev, name, values, names, n);
+}
+
+bool RollOffIno::ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n)
+{
+    if (dev != nullptr && strcmp(dev, getDeviceName()) == 0)
+    {
+        if (!strcmp(RoofTimeoutNP.name, name))
+        {
+            IUUpdateNumber(&RoofTimeoutNP, values, names, n);
+            RoofTimeoutNP.s = IPS_OK;
+            IDSetNumber(&RoofTimeoutNP, nullptr);
+            return true;
+        }
+    }
+
+    return INDI::Dome::ISNewNumber(dev, name, values, names, n);
+}
+
+
 ///////////////////////////////////////////
 // When IPX800 is connected two more tabs appear : States of Relays
 //  States of Digitals inputs
 ///////////////////////////////////////////
 bool Ipx800_v4::Connect()
 {
-	INDI::Dome::Connect();
-    //RollOff::Connect();
-	//bool rc2 = firstFonctionTabInit();
-    //bool rc = updateIPXData();
-	
-    return true;
+	bool status = INDI::Dome::Connect();
+    return status;
 }
 
 bool Ipx800_v4::Disconnect()
 {
-    INDI::Dome::deleteProperty(DomeMotionSP.name);
-    //this->updateProperties();
-    return true;
+    bool status = INDI::Dome::Disconnect();
+    return status;
 }
 
 const char *Ipx800_v4::getDefaultName()
@@ -548,9 +681,7 @@ const char *Ipx800_v4::getDefaultName()
 }
 
 /////////////////////////////////////////
-// Used after connection 
-// ** complete ** 
-// ajouter le snoop device
+// Used after connection / Disconnection
 /////////////////////////////////////////
 bool Ipx800_v4::updateProperties()
 {
@@ -560,7 +691,16 @@ bool Ipx800_v4::updateProperties()
     { // Connect both states tabs 
 		updateIPXData();
 		firstFonctionTabInit();
-		setObsStatus();
+		updateObsStatus();
+		if (InitPark())
+        {
+            DEBUG(INDI::Logger::DBG_SESSION, "Dome parking data was obtained");
+        }
+        // If we do not have Dome parking data
+        else
+        {
+            DEBUG(INDI::Logger::DBG_SESSION, "Dome parking data was not obtained");
+        }	
         for(int i=0;i<8;i++)
         {
             defineProperty(&RelaysStatesSP[i]);
@@ -568,14 +708,11 @@ bool Ipx800_v4::updateProperties()
         }
         for(int i=0;i<8;i++)
         {
-
              defineProperty(&DigitsStatesSP[i]);
         }
-       SetupParms();
-	  
-	   
-	   ///**  Recuperation aux parametres meteo **/
-	   //INDI::Dome::IDSnoopDevice("Weather Watcher", "WEATHER_STATUS");
+		defineProperty(&RoofStatusLP);      // All the roof status lights
+        defineProperty(&RoofTimeoutNP);
+        setupParams();
     }
     else { // Disconnect both "States TAB"
         for(int i=0;i<8;i++)
@@ -585,171 +722,230 @@ bool Ipx800_v4::updateProperties()
         }
         for(int i=0;i<8;i++)
         {
-
              deleteProperty(DigitsStatesSP[i].name);
         }
+		deleteProperty(RoofStatusLP.name);  // Delete the roof status lights
+		deleteProperty(RoofTimeoutNP.name);
     }
-	// snoop present a l'init, ou le mettre --pas necesaire
     return true;
 }
 
 //////////////////////////////////////////
-//
 // ** complete **
 //////////////////////////////////////////
 void Ipx800_v4::TimerHit()
 {
-    if (!isConnected()) {
+    double timeleft = CalcTimeLeft(MotionStart);
+    uint32_t delay = 1000 * INACTIVE_STATUS;   // inactive timer setting to maintain roof status lights
+    if (!isConnected())
         return; //  No need to reset timer if we are not connected anymore
-	}
-	LOG_DEBUG("TimerHit - Starting");
+
+    if (isSimulation())
+    {
+        if (timeleft - 5 <= 0)           // Use timeout approaching to set faux switch indicator
+        {
+            if (DomeMotionS[DOME_CW].s == ISS_ON)              // Opening
+            {
+                simRoofOpen = true;
+                simRoofClosed = false;
+            }
+            else if (DomeMotionS[DOME_CCW].s == ISS_ON)        // Closing
+            {
+                simRoofClosed = true;
+                simRoofOpen = false;
+            }
+        }
+    }
+
+    updateObsStatus();
+
     if (DomeMotionSP.s == IPS_BUSY)
     {
-        // Abort called
+        // Abort called stop movement.
         if (MotionRequest < 0)
         {
-            LOG_INFO("Roof motion is stopped.");
+            DEBUG(INDI::Logger::DBG_WARNING, "Roof motion is stopped");
             setDomeState(DOME_IDLE);
-            SetTimer(DEFAULT_POLLING_TIMER);
-            return;
         }
-
-        // Roll off is opening
-        if (DomeMotionS[DOME_CW].s == ISS_ON)
+        else
         {
-            if (getFullOpenedLimitSwitch())
+            // Roll off is opening
+            if (DomeMotionS[DOME_CW].s == ISS_ON)
             {
-                LOG_INFO("Roof is open.");
-                SetParked(false);
-                return;
+                if (fullyOpenedLimitSwitch == ISS_ON)
+                {
+                    DEBUG(INDI::Logger::DBG_DEBUG, "Roof is open");
+                    SetParked(false);
+                }
+                // See if time to open has expired.
+                else if (timeleft <= 0)
+                {
+                    LOG_WARN("Time allowed for opening the roof has expired?");
+                    setDomeState(DOME_IDLE);
+                    roofOpening = false;
+                    roofTimedOut = EXPIRED_OPEN;
+                }
+                else
+                {
+                    delay = 1000;           // opening active
+                }
+            }
+            // Roll Off is closing
+            else if (DomeMotionS[DOME_CCW].s == ISS_ON)
+            {
+                if (fullyClosedLimitSwitch == ISS_ON)
+                {
+                    DEBUG(INDI::Logger::DBG_DEBUG, "Roof is closed");
+                    SetParked(true);
+                }
+                // See if time to open has expired.
+                else if (timeleft <= 0)
+                {
+                    LOG_WARN("Time allowed for closing the roof has expired?");
+                    setDomeState(DOME_IDLE);
+                    roofClosing = false;
+                    roofTimedOut = EXPIRED_CLOSE;
+                }
+                else
+                {
+                    delay = 1000;           // closing active
+                }
             }
         }
-        // Roll Off is closing
-        else if (DomeMotionS[DOME_CCW].s == ISS_ON)
-        {
-            if (getFullClosedLimitSwitch())
-            {
-                LOG_INFO("Roof is closed.");
-                SetParked(true);
-                return;
-            }
-        }
-
-      SetTimer(DEFAULT_POLLING_TIMER);
     }
+	// read data from IPX, and update internal relay and digital data,
+	// update switches states, invert internal data if necessary
     updateIPXData();
+	// upadate and process tables of fonctions
 	firstFonctionTabInit();
-	setObsStatus();
+	// update and process Obs status variables 
+	updateObsStatus();
 
-    SetTimer(DEFAULT_POLLING_TIMER);
+    SetTimer(delay);
 }
 //////////////////////////////////////
 /* Save conf */
 bool Ipx800_v4::saveConfigItems(FILE *fp)
 {
-	INDI::Dome::saveConfigItems(fp);
-    //RollOff::saveConfigItems(fp);
+	bool status = INDI::Dome::saveConfigItems(fp);
     IUSaveConfigText(fp, &LoginPwdTP);
+	IUSaveConfigNumber(fp, &RoofTimeoutNP);
 	/** sauvegarde de la configuration des relais et entrées discretes **/ 
     for(int i=0;i<8;i++)
     {
-
         IUSaveConfigSwitch(fp, &RelaisInfoSP[i]);
         IUSaveConfigSwitch(fp, &DigitalInputSP[i]);
-		//IUSaveConfigSwitch(fp, &RelaysStatesSP[i]);
-		//IUSaveConfigSwitch(fp, &DigitsStatesSP[i]);
     }
-    return true;
+    return status;
 }
 //////////////////////////////////////
 /* Move Roof */
+/*
+ * Direction: DOME_CW Clockwise = Open; DOME-CCW Counter clockwise = Close
+ * Operation: MOTION_START, | MOTION_STOP
+ */
 IPState Ipx800_v4::Move(DomeDirection dir, DomeMotionCommand operation)
 {
 	LOG_DEBUG("MOOOOOOVVVVVE");
     //LOGF_INFO("direction %s, motion %s",dir, operation);
 	bool rc = false;
+    updateObsStatus();
+
 	LOGF_DEBUG("OPERATION : %d", operation);
 	if (operation == MOTION_START)
     {
-        // no way to choose open or close move, just choose to move
-	/*	if (roof_Status == ROOF_CLOSED && getWeatherState() == IPS_ALERT)
+		if (roofOpening)
         {
-            LOG_WARN("Weather conditions are in the danger zone. Cannot open roof.");
-            return IPS_ALERT;
-        }//INDI::RollOff::isLocked()
-        else if (mount_Status != BOTH_PARKED  && RollOff::isLocked())
+            LOG_WARN("Roof is in process of opening, wait for completion or abort current operation");
+            return IPS_OK;
+        }
+        if (roofClosing)
         {
-            DEBUG(INDI::Logger::DBG_WARNING,
-                  "Cannot close dome when mount is locking. Telescope not parked, see parking policy, in options tab");
-            return IPS_ALERT;
+            LOG_WARN("Roof is in process of closing, wait for completion or abort current operation");
+            return IPS_OK;
         }
-        else if(mount_Status == BOTH_PARKED) {
-            LOG_WARN("Roof is moving");
-            int relayNumber = Relay_Fonction_Tab [ROOF_CONTROL_COMMAND];
-           // isEngineOn = digitalState[Digital_Fonction_Tab[ROOF]];
-            LOGF_DEBUG("Switching On Relay Number %d",relayNumber+1);
-            rc = writeCommand(SetR, relayNumber+1);
-        }
-*/		
-		if (mount_Status != BOTH_PARKED || engine_Powered == false) {
-			LOG_WARN("Roof move cancelled. Mount or Roof's engine not ready");
-			return IPS_ALERT;
-		}
-		else if (mount_Status == BOTH_PARKED && engine_Powered == true) {
-			LOG_WARN("Roof is moving");
-            int relayNumber = Relay_Fonction_Tab [ROOF_CONTROL_COMMAND];
-           // isEngineOn = digitalState[Digital_Fonction_Tab[ROOF]];
-            LOGF_DEBUG("Switching On Relay Number %d",relayNumber+1);
-            rc = writeCommand(SetR, relayNumber+1);
-			//readAnswer();
-		}
-		/**
-		 if (dir == DOME_CW && fullOpenLimitSwitch == ISS_ON)
-		 {
-			LOG_WARN("Roof is already fully opened.");
-			return IPS_ALERT;
-		}
-		else if (dir == DOME_CW && getWeatherState() == IPS_ALERT)
-		{
-			LOG_WARN("Weather conditions are in the danger zone. Cannot open roof.");
-			return IPS_ALERT;
-		}
-		else if (dir == DOME_CCW && fullClosedLimitSwitch == ISS_ON)
-		{
-			LOG_WARN("Roof is already fully closed.");
-			return IPS_ALERT;
-		}
-		else if (dir == DOME_CCW && INDI::Dome::isLocked())
-		{
-			DEBUG(INDI::Logger::DBG_WARNING,
-				  "Cannot close dome when mount is locking. See: Telescope parking policy, in options tab");
-			return IPS_ALERT;
-		}
-		else if(mount_Status == BOTH_PARKED) {
-			int relayNumber = Relay_Fonction_Tab [ROOF_CONTROL_COMMAND];
-           // isEngineOn = digitalState[Digital_Fonction_Tab[ROOF]];
-            LOGF_DEBUG("Switching On Relay Number %d",relayNumber+1);
-            rc = writeCommand(SetR, relayNumber+1);
-		}*/
-		else {
-			LOGF_DEBUG("Move asked dir : %d", dir); 
-		}
-        fullOpenLimitSwitch   = ISS_OFF;
-        fullClosedLimitSwitch = ISS_OFF;
-        MotionRequest         = ROLLOFF_DURATION;
-        gettimeofday(&MotionStart, nullptr);
-        SetTimer(1000); // delai 20 sec
-        return IPS_BUSY;
-	}
 
-    return (INDI::Dome::Abort() ? IPS_OK : IPS_ALERT);
+        // Open Roof
+        // DOME_CW --> OPEN. If we are asked to "open" while we are fully opened as the
+        // limit switch indicates, then we simply return false.
+        if (dir == DOME_CW)
+        {
+            if (fullyOpenedLimitSwitch == ISS_ON)
+            {
+                LOG_WARN("DOME_CW directive received but roof is already fully opened");
+                SetParked(false);
+                return IPS_ALERT;
+            }
+			if (mount_Status != BOTH_PARKED || engine_Powered == false) {
+				LOG_WARN("Roof move cancelled. Mount not parked or Roof's engine not powered on");
+				return IPS_ALERT;
+			}
+            // Initiate action
+			if (mount_Status == BOTH_PARKED && engine_Powered == true) {
+				LOG_WARN("Roof is moving");
+				roofOpening = true;
+                roofClosing = false;
+                LOG_INFO("Roof is opening...");
+				int relayNumber = Relay_Fonction_Tab [ROOF_CONTROL_COMMAND];
+				// isEngineOn = digitalState[Digital_Fonction_Tab[ROOF]];
+				LOGF_DEBUG("Switching On Relay Number %d",relayNumber+1);
+				rc = writeCommand(SetR, relayNumber+1);
+				//readAnswer();
+			}
+            else
+            {
+                LOG_WARN("Failed to operate controller to open roof");
+                return IPS_ALERT;
+            }
+        }
+
+        // Close Roof
+        else if (dir == DOME_CCW)
+        {
+            if (fullyClosedLimitSwitch == ISS_ON)
+            {
+                SetParked(true);
+                LOG_WARN("DOME_CCW directive received but roof is already fully closed");
+                return IPS_ALERT;
+            }
+			if (mount_Status != BOTH_PARKED || engine_Powered == false) {
+				LOG_WARN("Roof move cancelled. Mount not parked or Roof's engine not powered on");
+				return IPS_ALERT;
+			}
+            // Initiate action
+			if (mount_Status == BOTH_PARKED && engine_Powered == true) {
+				LOG_WARN("Roof is moving");
+				roofOpening = false;
+                roofClosing = true;
+                LOG_INFO("Roof is closing...");
+				int relayNumber = Relay_Fonction_Tab [ROOF_CONTROL_COMMAND];
+				// isEngineOn = digitalState[Digital_Fonction_Tab[ROOF]];
+				LOGF_DEBUG("Switching On Relay Number %d",relayNumber+1);
+				rc = writeCommand(SetR, relayNumber+1);
+				//readAnswer();
+			}
+            else
+            {
+                LOG_WARN("Failed to operate controller to close roof");
+                return IPS_ALERT;
+            }
+        }
+		roofTimedOut = EXPIRED_CLEAR;
+        MotionRequest = (int)RoofTimeoutN[0].value;
+        LOGF_DEBUG("Roof motion timeout setting: %d", (int)MotionRequest);
+        gettimeofday(&MotionStart, nullptr);
+        SetTimer(1000);
+        return IPS_BUSY;
+    }
+    return    IPS_ALERT;
 }
 //////////////////////////////////////
 /* Park Roof */
-IPState Ipx800_v4::Park()
+//TODO renvoit State vs ipstate??
+State Ipx800_v4::Park()
 {
 	IPState rc = INDI::Dome::Move(DOME_CCW, MOTION_START);
-    //IPState rc = RollOff::Move(DOME_CCW, MOTION_START);
+    
     LOG_INFO("PARKKKKKK");
     if (rc == IPS_BUSY)
     {
@@ -763,12 +959,10 @@ IPState Ipx800_v4::Park()
 // Roof be open 
 //
 ////////////////////////////////////
-
-IPState Ipx800_v4::UnPark()
+State Ipx800_v4::UnPark()
 {
 	IPState rc = INDI::Dome::Move(DOME_CW, MOTION_START);
-    //IPState rc = RollOff::Move(DOME_CW, MOTION_START);
-     LOG_INFO("UNNNNNPARKKKKKK");
+    LOG_INFO("UNNNNNPARKKKKKK");
     if (rc == IPS_BUSY)
     {
         LOG_INFO("Roll off is unparking...");
@@ -782,6 +976,13 @@ IPState Ipx800_v4::UnPark()
 /* Emergency stop */
 bool Ipx800_v4::Abort()
 {
+	bool openState;
+    bool closeState;
+
+    updateObsStatus();
+    openState = (fullyOpenedLimitSwitch == ISS_ON);
+    closeState = (fullyClosedLimitSwitch == ISS_ON);
+
     MotionRequest = -1;
     bool isEngineOn = false;
     bool rc = false;
@@ -790,33 +991,55 @@ bool Ipx800_v4::Abort()
     
 	if (isEngineOn == false) {
 		LOG_WARN("Roof engine power supply already off."); 
-		return rc;
+		return true;
 	}
-	else { // TO TEST 
+	else if (closeState && DomeMotionSP.s != IPS_BUSY)
+    {
+        LOG_WARN("Roof appears to be closed and stationary, no action taken on abort request");
+        return true;
+    }
+    else if (openState && DomeMotionSP.s != IPS_BUSY)
+    {
+        LOG_WARN("Roof appears to be open and stationary, no action taken on abort request");
+        return true;
+    }
+	else if (DomeMotionSP.s != IPS_BUSY)
+    {
+        LOG_WARN("Roof appears to be partially open and stationary, no action taken on abort request");
+    }
+    else if (DomeMotionSP.s == IPS_BUSY)
+    {
+        if (DomeMotionS[DOME_CW].s == ISS_ON)
+        {
+            LOG_WARN("Abort roof action requested while the roof was opening. Direction correction may be needed on the next move request.");
+        }
+        else if (DomeMotionS[DOME_CCW].s == ISS_ON)
+        {
+            LOG_WARN("Abort roof action requested while the roof was closing. Direction correction may be needed on the next move request.");
+        }
+        roofClosing = false;
+        roofOpening = false;
+        MotionRequest = -1;
 		LOG_WARN("Emergency Stop");
 		LOGF_DEBUG("Switching off Relay Number %d",relayNumber+1);
 		rc = writeCommand(SetR, relayNumber+1);
-		//readAnswer();
-		// If both limit switches are off, then we're neither parked nor unparked.
-		if ((fullOpenLimitSwitch == ISS_OFF && fullClosedLimitSwitch == ISS_OFF) or (mount_Status == UNKNOWN_STATUS))
+		if (rc == true)
+		{
+			LOG_INFO("Roof Emergency Stop - Roof power supply switched OFF");
+			rc = updateIPXData(); //update digitals inputs and relays states
+			//firstFonctionTabInit();
+			updateObsStatus();
+		}
+    }
+	
+	if ((fullyOpenedLimitSwitch == ISS_OFF && fullyClosedLimitSwitch == ISS_OFF) or (mount_Status == UNKNOWN_STATUS))
 		{
 			LOG_DEBUG("Abort -  Idle state");
 			IUResetSwitch(&ParkSP);
 			ParkSP.s = IPS_IDLE;
 			IDSetSwitch(&ParkSP, nullptr);
-		}
-		
-		if (rc == true)
-		{
-			LOG_INFO("Roof Emergency Stop - Roof power supply switched OFF");
-			//rc = INDI::RollOff::Abort();
-			//rc = INDI::Dome::Abort();
-			rc = updateIPXData(); //update digitals inputs and relays states
-			firstFonctionTabInit();
-			setObsStatus();
-		}
-		return rc; 
 	}
+	return true;
 }
 
 //////////////////////////////////////
@@ -1048,6 +1271,8 @@ bool Ipx800_v4::writeTCP(std::string toSend) {
     return true;
 }
 
+//////////////////////////////////////
+/* CalcTimeLeft */
 float Ipx800_v4::CalcTimeLeft(timeval start)
 {
     double timesince;
@@ -1065,35 +1290,100 @@ float Ipx800_v4::CalcTimeLeft(timeval start)
 /* getFullOpenedLimitSwitch */
 bool Ipx800_v4::getFullOpenedLimitSwitch()
 {
-    double timeleft = CalcTimeLeft(MotionStart);
-	//setObsStatus();
-	
-    if (timeleft <= 0 && roof_Status == ROOF_IS_OPENED)
+    if (isSimulation())
     {
-        fullOpenLimitSwitch = ISS_ON;
+        if (simRoofOpen)
+        {
+            fullyOpenedLimitSwitch = ISS_ON;
+            *switchState = true;
+        }
+        else
+        {
+            fullyOpenedLimitSwitch = ISS_OFF;
+            *switchState = false;
+        }
+        return true;
+    }
+
+    if (readRoofSwitch(ROOF_OPENED_SWITCH, switchState))
+    {
+        if (*switchState)
+            fullyOpenedLimitSwitch = ISS_ON;
+        else
+            fullyOpenedLimitSwitch = ISS_OFF;
         return true;
     }
     else
+    {
+        LOG_WARN("Unable to obtain from the controller whether or not the roof is opened");
         return false;
+    }
 }
 //////////////////////////////////////
 /* getFullClosedLimitSwitch */
 
 bool Ipx800_v4::getFullClosedLimitSwitch()
 {
-    double timeleft = CalcTimeLeft(MotionStart);
-	//setObsStatus();
-	
-    if (timeleft <= 0 && roof_Status == ROOF_IS_CLOSED)
-    {	
+    if (isSimulation())
+    {
+        if (simRoofClosed)
+        {
+            fullyClosedLimitSwitch = ISS_ON;
+            *switchState = true;
+        }
+        else
+        {
+            fullyClosedLimitSwitch = ISS_OFF;
+            *switchState = false;
+        }
+        return true;
+    }
 
-        fullClosedLimitSwitch = ISS_ON;
+    if (readRoofSwitch(ROOF_CLOSED_SWITCH, switchState))
+    {
+        if (*switchState)
+            fullyClosedLimitSwitch = ISS_ON;
+        else
+            fullyClosedLimitSwitch = ISS_OFF;
         return true;
     }
     else
+    {
+        LOG_WARN("Unable to obtain from the controller whether or not the roof is closed");
         return false;
+    }
 }
 
+
+//////////////////////////////////////
+// readRoofSwitch
+/*
+ * If unable to determine switch state due to errors, return false.
+ * If no errors return true. Return in result true if switch and false if switch off.
+ */
+bool RollOffIno::readRoofSwitch(const int* roofSwitchId, bool *result)
+{
+    
+    bool status;
+	// TODO modifier le type de roofswitchid (entier c'est mieux)
+	// ecrire comparason roofswitchid vs roof_stauts
+	if ( roofSwitchId == roof_Status)
+		return true;
+	else 
+		return false; 
+    //Roof Status definition
+	int openedRoof = Digital_Fonction_Tab [ROOF_OPENED];
+	int closedRoof =  Digital_Fonction_Tab [ROOF_CLOSED];
+	LOGF_DEBUG("updateObsStatus - Roof openedRoof %d", digitalState[openedRoof]);
+	LOGF_DEBUG("updateObsStatus - Roof closedRoof %d", digitalState[closedRoof]);
+	if (digitalState[openedRoof] && !digitalState[closedRoof]) {
+		roof_Status = ROOF_IS_OPENED;
+	}
+	else if (!digitalState[openedRoof] && digitalState[closedRoof]) {
+		roof_Status = ROOF_IS_CLOSED; 
+	}
+	
+}
 
 //////////////////////////////////////
 /* updateIPXData */
@@ -1137,9 +1427,26 @@ bool Ipx800_v4::updateIPXData()
 }
 
 //////////////////////////////////////
-/* setObsStatus */
-void Ipx800_v4::setObsStatus()
+/* updateObsStatus */
+void Ipx800_v4::updateObsStatus()
 {
+	bool openedState = false;
+    bool closedState = false;
+
+    getFullOpenedLimitSwitch(&openedState);
+    getFullClosedLimitSwitch(&closedState);
+	
+	if (!openedState && !closedState && !roofOpening && !roofClosing)
+        DEBUG(INDI::Logger::DBG_WARNING, "Roof stationary, neither opened or closed, adjust to match PARK button");
+    if (openedState && closedState)
+        DEBUG(INDI::Logger::DBG_WARNING, "Roof showing it is both opened and closed according to the controller");
+
+	
+	RoofStatusL[ROOF_STATUS_OPENED].s = IPS_IDLE;
+    RoofStatusL[ROOF_STATUS_CLOSED].s = IPS_IDLE;
+    RoofStatusL[ROOF_STATUS_MOVING].s = IPS_IDLE;
+    RoofStatusLP.s = IPS_IDLE;
+	
     if (isConnected()) {
 		LOG_INFO("Updating observatory status ...");
 		//Mount STATUS definition
@@ -1156,40 +1463,67 @@ void Ipx800_v4::setObsStatus()
 		else {
 			mount_Status = NONE_PARKED;
 		}
-		LOGF_DEBUG("setObsStatus - Dec Axis input  %d", DecAxis);
-		LOGF_DEBUG("setObsStatus - Ra Axis input  %d", RaAxis);
-		LOGF_DEBUG("setObsStatus - Dec Axis status  %d", digitalState[DecAxis]);
-		LOGF_DEBUG("setObsStatus - Ra Axis status  %d", digitalState[RaAxis]);
-		LOGF_DEBUG("setObsStatus - Mount Status %d", mount_Status);
+		LOGF_DEBUG("updateObsStatus - Dec Axis input  %d", DecAxis);
+		LOGF_DEBUG("updateObsStatus - Ra Axis input  %d", RaAxis);
+		LOGF_DEBUG("updateObsStatus - Dec Axis status  %d", digitalState[DecAxis]);
+		LOGF_DEBUG("updateObsStatus - Ra Axis status  %d", digitalState[RaAxis]);
+		LOGF_DEBUG("updateObsStatus - Mount Status %d", mount_Status);
 
 		//Roof Status definition
 		int openedRoof = Digital_Fonction_Tab [ROOF_OPENED];
 		int closedRoof =  Digital_Fonction_Tab [ROOF_CLOSED];
-		LOGF_DEBUG("setObsStatus - Roof openedRoof %d", digitalState[openedRoof]);
-		LOGF_DEBUG("setObsStatus - Roof closedRoof %d", digitalState[closedRoof]);
+		LOGF_DEBUG("updateObsStatus - Roof openedRoof %d", digitalState[openedRoof]);
+		LOGF_DEBUG("updateObsStatus - Roof closedRoof %d", digitalState[closedRoof]);
 		if (digitalState[openedRoof] && !digitalState[closedRoof]) {
 			roof_Status = ROOF_IS_OPENED;
-			setDomeState(DOME_UNPARKED);
+			RoofStatusL[ROOF_STATUS_OPENED].s = IPS_OK;
+			RoofStatusLP.s = IPS_OK;
+			roofOpening = false;
+			//setDomeState(DOME_UNPARKED);
 			LOG_INFO("Roof is Open.");
 		}
 		else if (!digitalState[openedRoof] && digitalState[closedRoof]) {
 			roof_Status = ROOF_IS_CLOSED; 
-			setDomeState(DOME_PARKED);
-			LOG_INFO("Roof is Closed.");}
+			//setDomeState(DOME_PARKED);
+			roofClosing = false;
+            RoofStatusL[ROOF_STATUS_CLOSED].s = IPS_OK;
+            RoofStatusLP.s = IPS_OK;
+			LOG_INFO("Roof is Closed.");
+		}
+		else if (roofOpening || roofClosing) {
+			
+            if (roofOpening)
+            {
+                RoofStatusL[ROOF_STATUS_OPENED].s = IPS_BUSY;
+                RoofStatusL[ROOF_STATUS_MOVING].s = IPS_BUSY;
+            }
+            else if (roofClosing)
+            {
+                RoofStatusL[ROOF_STATUS_CLOSED].s = IPS_BUSY;
+                RoofStatusL[ROOF_STATUS_MOVING].s = IPS_BUSY;
+            }
+            RoofStatusLP.s = IPS_BUSY;
+        }
 		else {
 			LOG_ERROR("Roof status unknown !");
 			roof_Status = UNKNOWN_STATUS;
+			if (roofTimedOut == EXPIRED_OPEN)
+                RoofStatusL[ROOF_STATUS_OPENED].s = IPS_ALERT;
+            else if (roofTimedOut == EXPIRED_CLOSE)
+                RoofStatusL[ROOF_STATUS_CLOSED].s = IPS_ALERT;
+            RoofStatusLP.s = IPS_ALERT;
 		}
 		int tPower = Digital_Fonction_Tab [ROOF_ENGINE_POWERED];
 		// Roof Engine status
-		LOGF_DEBUG("setObsStatus - Roof engine input : %d", tPower+1); 
+		LOGF_DEBUG("updateObsStatus - Roof engine input : %d", tPower+1); 
 		//tPower = tPower +1;
 		engine_Powered = digitalState[tPower];
 		
-		LOGF_DEBUG("setObsStatus - Roof Engine is (0 : Off, 1 : On) : %d", engine_Powered);
+		LOGF_DEBUG("updateObsStatus - Roof Engine is (0 : Off, 1 : On) : %d", engine_Powered);
 		
-		LOGF_DEBUG("setObsStatus - Roof Status %d", roof_Status);
+		LOGF_DEBUG("updateObsStatus - Roof Status %d", roof_Status);
 	}
+	IDSetLight(&RoofStatusLP, nullptr);
 }
 
 //////////////////////////////////////
@@ -1247,16 +1581,6 @@ bool Ipx800_v4::checkAnswer()
 
     return true;
 }
-///////////////////////////////////////////////////////////
-// A developper via connexion aag_cloudwatcher
-///////////////////////////////////////////////////////////
-IPState Ipx800_v4::getWeatherState()
-{
-	IPState weatherStatus = IPS_BUSY;
-	weatherStatus = IPS_OK; 
-	return weatherStatus;
-} 
- 
 
 IText* Ipx800_v4::getMyLogin()
 {

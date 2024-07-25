@@ -2,10 +2,10 @@
 This file is part of the IPX800 V4 INDI Driver.
 A driver for the IPX800 (AAGware - http : //www.aagware.eu/)
 
-Copyright (C) 2022 Arnaud Dupont (aknotwot@protonmail.com)
+Copyright (C) 2024 Arnaud Dupont (aknotwot@protonmail.com)
 
 IPX800 V4 INDI Driver is free software : you can redistribute it
-and / or modify it under the terms of the GNU General Public License as
+and / or modify it under the terms of the GNU Lesser General Public License as
 published by the Free Software Foundation, either version 3 of the License,
 or (at your option) any later version.
 
@@ -14,7 +14,7 @@ useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
+You should have received a copy of the GNU Lesser General Public License
 along with IPX800 V4  INDI Driver.  If not, see
 < http : //www.gnu.org/licenses/>.
 
@@ -29,15 +29,17 @@ class Ipx800_v4 : public INDI::Dome
   public:
   
 	Ipx800_v4();
-    virtual ~Ipx800_v4() = default;
+    virtual ~Ipx800_v4() override = default;
 	
 	virtual bool initProperties() override;
 	bool updateProperties() override;
-	bool Handshake();
-	virtual const char *getDefaultName() override;
+	
+	virtual bool Handshake() override;
+	const char *getDefaultName() override;
+	virtual void ISGetProperties(const char *dev) override;
     virtual bool ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n) override;
     virtual bool ISNewText(const char *dev, const char *name, char *texts[], char *names[], int n) override;
-    //virtual bool ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n) override;
+    virtual bool ISNewNumber(const char *dev,const char *name,double values[],char *names[],int n) override;
 	virtual bool saveConfigItems(FILE *fp) override;
     virtual bool ISSnoopDevice(XMLEle *root) override;
    
@@ -55,8 +57,8 @@ class Ipx800_v4 : public INDI::Dome
     virtual IPState Park() override;
     virtual IPState UnPark() override;
     virtual bool Abort() override; 
-	virtual bool getFullOpenedLimitSwitch();
-    virtual bool getFullClosedLimitSwitch();
+	virtual bool getFullOpenedLimitSwitch(bool*);
+    virtual bool getFullClosedLimitSwitch(bool*);
 
     enum IPX800_command {
        GetR   = 1 << 0,
@@ -71,7 +73,7 @@ class Ipx800_v4 : public INDI::Dome
 	// IPX800 Communication
 	///////////////////////////////////////////
 	bool updateIPXData();
-    void setObsStatus();
+    void updateObsStatus();
     bool readCommand(IPX800_command);
     bool writeCommand(IPX800_command, int toSet);
     bool checkAnswer();
@@ -117,7 +119,7 @@ class Ipx800_v4 : public INDI::Dome
         OTHER_DIGITAL_2 } IPXDigitalRead;
 	
     char tmpAnswer[8]= {0};
-    bool SetupParms();
+    bool setupParams();
     float CalcTimeLeft(timeval);
 
     ISState fullOpenLimitSwitch { ISS_ON };
@@ -209,5 +211,8 @@ int Digital_Fonction_Tab [11] = {0};
 	
     std::string myPasswd = "";
     std::string myLogin = "";
+	
+    INumberVectorProperty RoofTimeoutNP;
+
 
 };
