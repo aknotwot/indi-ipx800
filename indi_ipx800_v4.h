@@ -1,6 +1,6 @@
 /*******************************************************************************
 This file is part of the IPX800 V4 INDI Driver.
-A driver for the IPX800 (AAGware - http : //www.aagware.eu/)
+A driver for the IPX800 (GCE Electronics - https://www.gce-electronics.com)
 
 Copyright (C) 2024 Arnaud Dupont (aknotwot@protonmail.com)
 
@@ -22,8 +22,10 @@ along with IPX800 V4  INDI Driver.  If not, see
 #pragma once
 
 #include "indidome.h"
+#include <indioutputinterface.h>
+#include <indiinputinterface.h>
  
-class Ipx800_v4 : public INDI::Dome
+class Ipx800_v4 : public INDI::Dome, public INDI::InputInterface, public INDI::OutputInterface
  
 {
   public:
@@ -43,11 +45,7 @@ class Ipx800_v4 : public INDI::Dome
 	virtual bool saveConfigItems(FILE *fp) override;
     virtual bool ISSnoopDevice(XMLEle *root) override;
    
-    
-
-  protected:
-
-	//const char *getDefaultName();
+ protected:
 	
 	bool Connect() override;
     bool Disconnect() override;
@@ -59,16 +57,15 @@ class Ipx800_v4 : public INDI::Dome
     virtual bool Abort() override; 
 	virtual bool getFullOpenedLimitSwitch(bool*);
     virtual bool getFullClosedLimitSwitch(bool*);
-
+	virtual bool readRoofSwitch(const int roofSwitchId, bool* result);
+	
     enum IPX800_command {
        GetR   = 1 << 0,
        GetD  = 1 << 1,
        SetR = 1 << 2,
        ClearR = 1 << 3
    } ;
-   
-
-    
+       
 	///////////////////////////////////////////
 	// IPX800 Communication
 	///////////////////////////////////////////
@@ -82,6 +79,12 @@ class Ipx800_v4 : public INDI::Dome
     bool writeTCP(std::string toSend);
 	bool firstFonctionTabInit();
 	IPState getWeatherState();
+	
+	
+    virtual bool UpdateDigitalInputs() override;
+    virtual bool UpdateAnalogInputs() override;
+    virtual bool UpdateDigitalOutputs() override;
+    virtual bool CommandOutput(uint32_t index, OutputState command) override;
 
   private:
   
@@ -161,8 +164,12 @@ class Ipx800_v4 : public INDI::Dome
 
 	const char *ROLLOFF_TAB        = "Roll Off";
 	const char *RELAYS_CONFIGURATION_TAB        = "Relays Outputs";
-	const char *DIGITAL_INPUT_CONFIGURATION_TAB        = "Digitals Inputs";
+	const char *DIGITAL_INPUT_CONFIGURATION_TAB        = "Digital Inputs";
 	const char *RAW_DATA_TAB = "Status";
+
+	const int DIGITAL_INTPUTS = 8;
+	const int RELAYS_OUTPUTS = 8;
+
 
     // Relay_Fonction_Tab provide relay output in charge of the function
     // fonctions are ordered arbitrarly as following. 
@@ -185,7 +192,7 @@ class Ipx800_v4 : public INDI::Dome
     // fonctions are ordered arbitrarly as following. 
 	// Only 8 functions applicable - only 8 digital inputs on IPX800
 	// Others are spares
-int Digital_Fonction_Tab [11] = {0};
+	int Digital_Fonction_Tab [11] = {0};
     /*
        0:  UNUSED_DIGIT,
         DEC_AXIS_PARKED,
@@ -212,7 +219,22 @@ int Digital_Fonction_Tab [11] = {0};
     std::string myPasswd = "";
     std::string myLogin = "";
 	
+    //Rolffino
+	ISState fullyOpenedLimitSwitch {ISS_OFF};
+    ISState fullyClosedLimitSwitch {ISS_OFF};
+    ISState roofLockedSwitch {ISS_OFF};
+    ISState roofAuxiliarySwitch {ISS_OFF};
+    INumber RoofTimeoutN[1] {};
     INumberVectorProperty RoofTimeoutNP;
-
-
+    enum { EXPIRED_CLEAR, EXPIRED_OPEN, EXPIRED_CLOSE };
+    unsigned int roofTimedOut;
+    bool simRoofOpen = false;
+    bool simRoofClosed = true;
+    unsigned int communicationErrors = 0;
+		enum { ROOF_STATUS_OPENED, ROOF_STATUS_CLOSED, ROOF_STATUS_MOVING, ROOF_STATUS_LOCKED, ROOF_STATUS_AUXSTATE };
+	ILight RoofStatusL[5];
+    ILightVectorProperty RoofStatusLP;
+	bool roofOpening = false;
+    bool roofClosing = false;
+	
 };
