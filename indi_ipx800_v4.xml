@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<driversList>
+<devGroup group="Auxiliary">
+	<device label="IPX800v4">
+                <driver name="IPX800v4">indi_ipx800_v4</driver>
+                <version>0.4</version>
+	</device>
+</devGroup>
+</driversList>

@@ -21,11 +21,11 @@ along with IPX800 V4  INDI Driver.  If not, see
 *******************************************************************************/
 #pragma once
 
-#include "indidome.h"
+#include "defaultdevice.h"
 #include <indioutputinterface.h>
 #include <indiinputinterface.h>
  
-class Ipx800_v4 : public INDI::Dome, public INDI::InputInterface, public INDI::OutputInterface
+class Ipx800_v4 : public INDI::DefaultDevice, public INDI::InputInterface, public INDI::OutputInterface
  
 {
   public:
@@ -34,29 +34,30 @@ class Ipx800_v4 : public INDI::Dome, public INDI::InputInterface, public INDI::O
     virtual ~Ipx800_v4() override = default;
 	
 	virtual bool initProperties() override;
-	bool updateProperties() override;
-	
-	virtual bool Handshake() override;
+	virtual bool updateProperties() override;
 	const char *getDefaultName() override;
-	virtual void ISGetProperties(const char *dev) override;
-    virtual bool ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n) override;
+	
+	virtual bool ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n) override;
     virtual bool ISNewText(const char *dev, const char *name, char *texts[], char *names[], int n) override;
     virtual bool ISNewNumber(const char *dev,const char *name,double values[],char *names[],int n) override;
-	virtual bool saveConfigItems(FILE *fp) override;
+	   
+	//TO CONFIRM
+	
     virtual bool ISSnoopDevice(XMLEle *root) override;
-   
+    virtual void ISGetProperties(const char *dev) ;
  protected:
 	
+	bool Handshake();
 	bool Connect() override;
     bool Disconnect() override;
 	void TimerHit() override;
 
-    virtual IPState Move(DomeDirection dir, DomeMotionCommand operation) override;
-    virtual IPState Park() override;
-    virtual IPState UnPark() override;
-    virtual bool Abort() override; 
-	virtual bool getFullOpenedLimitSwitch(bool*);
-    virtual bool getFullClosedLimitSwitch(bool*);
+    //virtual IPState Move(DomeDirection dir, DomeMotionCommand operation) override;
+    //virtual IPState Park() override;
+    //virtual IPState UnPark() override;
+    //virtual bool Abort() override; 
+	//virtual bool getFullOpenedLimitSwitch(bool*);
+    //virtual bool getFullClosedLimitSwitch(bool*);
 	virtual bool readRoofSwitch(const int roofSwitchId, bool* result);
 	
     enum IPX800_command {
@@ -78,19 +79,24 @@ class Ipx800_v4 : public INDI::Dome, public INDI::InputInterface, public INDI::O
     void recordData(IPX800_command command);
     bool writeTCP(std::string toSend);
 	bool firstFonctionTabInit();
-	IPState getWeatherState();
+	
 	
 	
     virtual bool UpdateDigitalInputs() override;
-    virtual bool UpdateAnalogInputs() override;
+    virtual bool UpdateAnalogInputs() override; // IPX800 Analog Inputs not managed
     virtual bool UpdateDigitalOutputs() override;
     virtual bool CommandOutput(uint32_t index, OutputState command) override;
-
+	virtual bool saveConfigItems(FILE *fp) override;
+	
   private:
   
-	IText* getMyLogin();
-    ITextVectorProperty getMyLoginVector();
-    ISwitchVectorProperty getMyRelayVector(int i);
+	Connection::TCP *tcpConnection {nullptr};
+	
+	// TO manage Password in a next release
+	//IText* getMyLogin();
+    //ITextVectorProperty getMyLoginVector();
+    
+	ISwitchVectorProperty getMyRelayVector(int i);
     ISwitchVectorProperty getMyDigitsVector(int i);
 	
 	// List of possible commands 
@@ -143,9 +149,11 @@ class Ipx800_v4 : public INDI::Dome, public INDI::InputInterface, public INDI::O
     ISwitch Digit1StateS[2],Digit2StateS[2],Digit3StateS[2],Digit4StateS[2],Digit5StateS[2],Digit6StateS[2],Digit7StateS[2],Digit8StateS[2] ;
     ISwitchVectorProperty DigitsStatesSP[8] ;
 
-    //Gestion Acces IPX
-    IText LoginPwdT[2];
-    ITextVectorProperty LoginPwdTP;
+    //TO manage Password in a next release
+    //IText LoginPwdT[2];
+    //ITextVectorProperty LoginPwdTP;
+	//std::string myPasswd = "";
+    //std::string myLogin = "";
 
     enum {
         ROOF_IS_OPENED ,
@@ -216,10 +224,7 @@ class Ipx800_v4 : public INDI::Dome, public INDI::InputInterface, public INDI::O
 	bool engine_Powered = false ; //  True = on / false = Off 
 	bool first_Start = false;
 	
-    std::string myPasswd = "";
-    std::string myLogin = "";
-	
-    //Rolffino
+	//Rolffino
 	ISState fullyOpenedLimitSwitch {ISS_OFF};
     ISState fullyClosedLimitSwitch {ISS_OFF};
     ISState roofLockedSwitch {ISS_OFF};
