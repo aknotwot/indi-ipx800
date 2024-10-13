@@ -292,24 +292,6 @@ bool Ipx800_v4::initProperties()
                      IP_RO,ISR_1OFMANY, 60, IPS_IDLE);
 	
 	setDefaultPollingPeriod(2000);
-	/*
-	LOG_INFO("Description Fields IP");
-	// IP Address Field
-	IPPortTP[0].setName("IP_ADDRESS");
-	IPPortTP[0].setLabel("IP");
-	IPPortTP[0].setText("192.168.0.1");  // Valeur par défaut
-	LOG_INFO("Description Fields Port");
-	// Port Field
-	IPPortTP[1].setName("PORT");
-	IPPortTP[1].setLabel("Port");
-	IPPortTP[1].setText("7624");  // Valeur par défaut
-	LOG_INFO("Description Fields setstate");
-	// Définir la propriété pour l'afficher dans l'interface utilisateur
-	IPPortTP.setState(IPS_IDLE);
-	defineProperty(IPPortTP);
-    LOG_INFO("Description Fields Fill");
-    IPPortTP.fill(getDeviceName(), "IPX Address", "IPX Address", MAIN_CONTROL_TAB, IP_RW, 60, IPS_IDLE);
-	IPPortTP.load(); */
 	
 	tcpConnection = new Connection::TCP(this);
 	tcpConnection->setConnectionType(Connection::TCP::TYPE_TCP);
@@ -430,7 +412,6 @@ bool Ipx800_v4::ISNewSwitch(const char *dev, const char *name, ISState *states, 
 					
 				
 				LOGF_DEBUG("Relay function selected - SP : %s", myRelaisInfoSP.name);
-				//currentRS = IUFindSwitch(&myRelaisInfoSP, myRelaisInfoSP.name);
 				IUUpdateSwitch(&myRelaisInfoSP,states,names,n);
 				
 				myRelaisInfoS = myRelaisInfoSP.sp;
@@ -552,11 +533,7 @@ bool Ipx800_v4::Connect()
 {
 	bool status = INDI::DefaultDevice::Connect();
 	LOG_DEBUG("Connecting to device...");
-   /* if (!tcpConnection->Connect())
-    {
-        LOG_ERROR("Handshake failed");
-        return false;
-    }*/
+
     return status;
     
 }
@@ -628,16 +605,7 @@ void Ipx800_v4::TimerHit()
 	}
 	
 	updateIPXData();
-    //updateObsStatus();
-
-	// read data from IPX, and update internal relay and digital data,
-	// update switches states, invert internal data if necessary
     
-	// upadate and process tables of fonctions
-	//firstFonctionTabInit();
-	// update and process Obs status variables 
-	//updateObsStatus();
-
     SetTimer(getPollingPeriod());
 }
 //////////////////////////////////////
@@ -1008,6 +976,7 @@ void Ipx800_v4::recordData(IPX800_command recCommand) {
 			    DigitalInputsSP[i].setState(IPS_OK);
                 DigitalInputsSP[i].apply();
 			    defineProperty(&DigitsStatesSP[i]);
+				DigitsStatesSP[i].apply();
 			}
 			
 			for (i=0;i<10;i++) {
@@ -1076,21 +1045,26 @@ void Ipx800_v4::recordData(IPX800_command recCommand) {
     case GetR :
         for (int i=0;i<8;i++){
             RelaysStatesSP[i].s = IPS_OK;
+			DigitalOutputsSP[i].reset();
             if (tmpAnswer[i] == '0') {
                 LOGF_DEBUG("recordData - Relay N° %d is %s",i+1,"OFF");
                 RelaysStatesSP[i].sp[0].s = ISS_OFF;
                 RelaysStatesSP[i].sp[1].s = ISS_ON;
+				DigitalOutputsSP[i][0].setState(ISS_ON);
                 relayState[i]= false;
-
             }
             else {
                 LOGF_DEBUG("recordData - Relay N° %d is %s",i+1,"ON");
                 RelaysStatesSP[i].sp[0].s  = ISS_ON;
                 RelaysStatesSP[i].sp[1].s  = ISS_OFF;
+				DigitalOutputsSP[i][1].setState(ISS_ON);
                 relayState[i]=true;
             }
             tmpAnswer[i] = ' ';
+			DigitalOutputsSP[i].setState(IPS_OK);
+            DigitalOutputsSP[i].apply();
 			defineProperty(&RelaysStatesSP[i]);
+			RelaysStatesSP[i].apply();
         }
         break;
     default :
