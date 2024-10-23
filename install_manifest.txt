@@ -1,2 +1,2 @@
-/usr/bin/indi_ipx800_v4
-/usr/share/indi/indi_ipx800_v4.xml
+/usr/bin/indi_ipx800
+/usr/share/indi/indi_ipx800.xml

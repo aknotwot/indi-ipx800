@@ -1,21 +1,21 @@
 /*******************************************************************************
-This file is part of the IPX800 V4 INDI Driver.
+This file is part of the IPX800 INDI Driver.
 A driver for the IPX800 (GCE Electronics - https://www.gce-electronics.com)
 
 Copyright (C) 2024 Arnaud Dupont (aknotwot@protonmail.com)
 
-IPX800 V4 INDI Driver is free software : you can redistribute it
+IPX800 INDI Driver is free software : you can redistribute it
 and / or modify it under the terms of the GNU Lesser General Public License as
 published by the Free Software Foundation, either version 3 of the License,
 or (at your option) any later version.
 
-IPX800 V4  INDI Driver is distributed in the hope that it will be
+IPX800 INDI Driver is distributed in the hope that it will be
 useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
 You should have received a copy of the GNU Lesser General Public License
-along with IPX800 V4  INDI Driver.  If not, see
+along with IPX800 INDI Driver.  If not, see
 < http : //www.gnu.org/licenses/>.
 
 *******************************************************************************/
@@ -24,14 +24,16 @@ along with IPX800 V4  INDI Driver.  If not, see
 #include "defaultdevice.h"
 #include <indioutputinterface.h>
 #include <indiinputinterface.h>
+#include <indidevapi.h>
+#include <indiapi.h>
  
-class Ipx800_v4 : public INDI::DefaultDevice, public INDI::InputInterface, public INDI::OutputInterface
+class Ipx800 : public INDI::DefaultDevice, public INDI::InputInterface, public INDI::OutputInterface
  
 {
   public:
   
-	Ipx800_v4();
-    virtual ~Ipx800_v4() override = default;
+	Ipx800();
+    virtual ~Ipx800() override = default;
 	
 	virtual bool initProperties() override;
 	virtual bool updateProperties() override;
@@ -80,8 +82,6 @@ class Ipx800_v4 : public INDI::DefaultDevice, public INDI::InputInterface, publi
     bool writeTCP(std::string toSend);
 	bool firstFonctionTabInit();
 	
-	
-	
     virtual bool UpdateDigitalInputs() override;
     virtual bool UpdateAnalogInputs() override; // IPX800 Analog Inputs not managed
     virtual bool UpdateDigitalOutputs() override;
@@ -89,7 +89,7 @@ class Ipx800_v4 : public INDI::DefaultDevice, public INDI::InputInterface, publi
 	virtual bool saveConfigItems(FILE *fp) override;
 	
   private:
-  
+	bool roofPowerManagement = false;
 	Connection::TCP *tcpConnection {nullptr};
 	
 	// TO manage Password in a next release
@@ -221,25 +221,12 @@ class Ipx800_v4 : public INDI::DefaultDevice, public INDI::InputInterface, publi
 	
     int mount_Status = RA_PARKED | DEC_PARKED | BOTH_PARKED | NONE_PARKED;
     int roof_Status  = ROOF_IS_OPENED | ROOF_IS_CLOSED | UNKNOWN_STATUS;
-	bool engine_Powered = false ; //  True = on / false = Off 
+	bool enginePowered = false ; //  True = on / false = Off 
 	bool first_Start = false;
 	
-	//Rolffino
-	ISState fullyOpenedLimitSwitch {ISS_OFF};
-    ISState fullyClosedLimitSwitch {ISS_OFF};
-    ISState roofLockedSwitch {ISS_OFF};
-    ISState roofAuxiliarySwitch {ISS_OFF};
-    INumber RoofTimeoutN[1] {};
-    INumberVectorProperty RoofTimeoutNP;
-    enum { EXPIRED_CLEAR, EXPIRED_OPEN, EXPIRED_CLOSE };
-    unsigned int roofTimedOut;
-    bool simRoofOpen = false;
-    bool simRoofClosed = true;
-    unsigned int communicationErrors = 0;
-		enum { ROOF_STATUS_OPENED, ROOF_STATUS_CLOSED, ROOF_STATUS_MOVING, ROOF_STATUS_LOCKED, ROOF_STATUS_AUXSTATE };
-	ILight RoofStatusL[5];
-    ILightVectorProperty RoofStatusLP;
-	bool roofOpening = false;
-    bool roofClosing = false;
+	ISwitch IPXVersionS[5];
+	ISwitch roofEnginePowerS[2];
+	ISwitchVectorProperty IPXVersionSP, roofEnginePowerSP;
+	
 	
 };
