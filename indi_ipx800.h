@@ -53,14 +53,6 @@ class Ipx800 : public INDI::DefaultDevice, public INDI::InputInterface, public I
 	bool Connect() override;
     bool Disconnect() override;
 	void TimerHit() override;
-
-    //virtual IPState Move(DomeDirection dir, DomeMotionCommand operation) override;
-    //virtual IPState Park() override;
-    //virtual IPState UnPark() override;
-    //virtual bool Abort() override; 
-	//virtual bool getFullOpenedLimitSwitch(bool*);
-    //virtual bool getFullClosedLimitSwitch(bool*);
-	virtual bool readRoofSwitch(const int roofSwitchId, bool* result);
 	
     enum IPX800_command {
        GetR   = 1 << 0,

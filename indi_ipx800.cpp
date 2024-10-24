@@ -968,70 +968,7 @@ bool Ipx800::writeTCP(std::string toSend) {
     return true;
 }
 
-bool Ipx800::getFullClosedLimitSwitch(bool* switchState)
-{
-    if (isSimulation())
-    {
-        if (simRoofClosed)
-        {
-            fullyClosedLimitSwitch = ISS_ON;
-            *switchState = true;
-        }
-        else
-        {
-            fullyClosedLimitSwitch = ISS_OFF;
-            *switchState = false;
-        }
-        return true;
-    }
 
-    if (readRoofSwitch(ROOF_CLOSED_SWITCH, switchState))
-    {
-        if (*switchState)
-            fullyClosedLimitSwitch = ISS_ON;
-        else
-            fullyClosedLimitSwitch = ISS_OFF;
-        return true;
-    }
-    else
-    {
-        LOG_WARN("Unable to obtain from the controller whether or not the roof is closed");
-        return false;
-    }
-}
-
-*/
-//////////////////////////////////////
-// readRoofSwitch
-/*
- * If unable to determine switch state due to errors, return false.
- * If no errors return true. Return in result true if switch and false if switch off.
- */
-bool Ipx800::readRoofSwitch(const int roofSwitchId, bool *result)
-{   
-	/*
-    bool status;
-	// TODO modifier le type de roofswitchid (entier c'est mieux)
-	// ecrire comparason roofswitchid vs roof_stauts
-	if ( roofSwitchId == roof_Status)
-		return true;
-	else 
-		return false; 
-    //Roof Status definition
-	int openedRoof = Digital_Fonction_Tab [ROOF_OPENED];
-	int closedRoof =  Digital_Fonction_Tab [ROOF_CLOSED];
-	LOGF_DEBUG("updateObsStatus - Roof openedRoof %d", digitalState[openedRoof]);
-	LOGF_DEBUG("updateObsStatus - Roof closedRoof %d", digitalState[closedRoof]);
-	if (digitalState[openedRoof] && !digitalState[closedRoof]) {
-		roof_Status = ROOF_IS_OPENED;
-	}
-	else if (!digitalState[openedRoof] && digitalState[closedRoof]) {
-		roof_Status = ROOF_IS_CLOSED; 
-	}
-	*/
-	return result;
-	
-}
 
 //////////////////////////////////////
 /* updateIPXData */
@@ -1061,8 +998,8 @@ bool Ipx800::updateIPXData()
 /* updateObsStatus */
 void Ipx800::updateObsStatus()
 {
-	bool openedState = false;
-    bool closedState = false;
+	//bool openedState = false;
+    //bool closedState = false;
 
   //  getFullOpenedLimitSwitch(&openedState);
    // getFullClosedLimitSwitch(&closedState);
