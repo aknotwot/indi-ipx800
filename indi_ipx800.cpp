@@ -1,32 +1,35 @@
 /*******************************************************************************
-This file is part of the IPX800 V4 INDI Driver.
-A driver for the IPX800 (GCE - http : //www.aagware.eu/)
+This file is part of the IPX800 INDI Driver.
+A driver for the IPX800 (GCE Electronics - https://www.gce-electronics.com)
 
-Copyright (C) 2022 Arnaud Dupont (aknotwot@protonmail.com)
+Copyright (C) 2024 Arnaud Dupont (aknotwot@protonmail.com)
 
-IPX800 V4 INDI Driver is free software : you can redistribute it
-and / or modify it under the terms of the GNU General Public License as
+IPX800 INDI Driver is free software : you can redistribute it
+and / or modify it under the terms of the GNU Lesser General Public License as
 published by the Free Software Foundation, either version 3 of the License,
 or (at your option) any later version.
 
-IPX800 V4  INDI Driver is distributed in the hope that it will be
+IPX800 INDI Driver is distributed in the hope that it will be
 useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+GNU Lesser General Public License for more details.
 
-You should have received a copy of the GNU General Public License
-along with IPX800 V4  INDI Driver.  If not, see
+You should have received a copy of the Lesser GNU General Public License
+along with IPX800 INDI Driver.  If not, see
 < http : //www.gnu.org/licenses/>.
 
+This driver is adapted from RollOff ino drivers developped by Jasem Mutlaq.
+The main purpose of this driver is to connect to IPX to driver, communicate, and manage 
+opening and closing of roof. 
+It is able to read IPX800 digital datas to check status and position of the roof.
+User can select, partially, for this first release, how IPX 800 is configured 
 *******************************************************************************/
 
-#include "indi_ipx800_v4.h"
+#include "indi_ipx800.h"
 
 #include "indicom.h"
 #include "config.h"
 
-#include "indistandardproperty.h"
-#include "indipropertyswitch.h"
 #include "connectionplugins/connectiontcp.h"
 
 #include <cmath>
@@ -40,6 +43,8 @@ along with IPX800 V4  INDI Driver.  If not, see
 #include <algorithm>
 #include <chrono>
 #include <thread>
+#include <functional>
+#include <regex>
 
 //Network related includes:
 #include <sys/socket.h>
@@ -47,67 +52,57 @@ along with IPX800 V4  INDI Driver.  If not, see
 #include <arpa/inet.h>
 #include <unistd.h>
 
-
-// We declare an auto pointer to ipx800_v4.
-std::unique_ptr<Ipx800_v4> ipx800v4(new Ipx800_v4());
-
-#define ROLLOFF_DURATION 20 // 20 seconds until roof is fully opened or closed
+#define ROLLOFF_DURATION 30 // 30 seconds until roof is fully opened or closed
 #define DEFAULT_POLLING_TIMER 2000
 
+// Read only
+#define ROOF_OPENED_SWITCH 0
+#define ROOF_CLOSED_SWITCH 1
+
+// Write only
+#define ROOF_OPEN_RELAY     "OPEN"
+#define ROOF_CLOSE_RELAY    "CLOSE"
+#define ROOF_ABORT_RELAY    "ABORT"
+
+// Rollfino
+#define INACTIVE_STATUS  5 
+
+// We declare an auto pointer to ipx800.
+std::unique_ptr<Ipx800> ipx800(new Ipx800());
+
+void ISPoll(void *p);
 
 /*************************************************************************/
 /** Constructor                                                         **/
 /*************************************************************************/
 
-Ipx800_v4::Ipx800_v4()
+Ipx800::Ipx800() : INDI::InputInterface(this), INDI::OutputInterface(this)
 {
-    LOG_INFO("Setting Capabilities...");
-    //Forcer les particularités du DOME
-    SetDomeCapability(DOME_CAN_ABORT | DOME_CAN_PARK);
-    //Abort for emergency only. S/OFF power
-	//Connection Ethernet obligatoire
-    setDomeConnection(CONNECTION_TCP);
-	setDomeState(DOME_UNKNOWN);
-    // init variables
+    
 	Roof_Status = UNKNOWN_STATUS;
 	Mount_Status = NONE_PARKED;
-	
-	//IPX800_command = ClearR;
-	//IPXRelaysCommands = UNUSED_RELAY;
-	//IPXDigitalRead = UNUSED_DIGIT;
-	//initialiser les variables dans le .H 
-	
-	//LOG_INFO("Delete Property...");
-	//INDI::Dome::deleteProperty(DomeMotionSP.name);
-    LOG_INFO("Capabilities Set...");
-	setVersion(IPX800_V4_VERSION_MAJOR,IPX800_V4_VERSION_MINOR);
+
+	setVersion(IPX800_VERSION_MAJOR,IPX800_VERSION_MINOR);
 }
-
-
-/*************************************************************************/
-/** DeConstructor                                                         **/
-/*************************************************************************/
-/*
-Ipx800_v4::~Ipx800_v4()
-{
-	INDI::Dome::~Dome();
-}*/
 
 /************************************************************************************
 *
 ************************************************************************************/
-bool Ipx800_v4::initProperties()
+bool Ipx800::initProperties()
 {
     LOG_INFO("Starting device...");
     
-	INDI::Dome::initProperties();
-	//buildSkeleton("indi_ipx800v4_sk.xml");
-    SetParkDataType(PARK_NONE);
-    addDebugControl();
+	INDI::DefaultDevice::initProperties();
+	INDI::InputInterface::initProperties("Inputs&Outputs", DIGITAL_INTPUTS, 0, "Digital");
+    INDI::OutputInterface::initProperties("Inputs&Outputs", RELAYS_OUTPUTS, "Relay");
+		
+   // SetParkDataType(PARK_NONE);
+    //addDebugControl(); 
+    addAuxControls();         // This is for standard controls not the local auxiliary switch
 	addConfigurationControl();
-	//setDebug(true);
 	
-    //creation liste deroulante Relais
+
+	//Rolling list of possible functions managed by relays
     IUFillSwitch(&RelaisInfoS[0], "Unused", "",ISS_ON);
     IUFillSwitch(&RelaisInfoS[1], "Roof Engine Power", "", ISS_OFF);
     IUFillSwitch(&RelaisInfoS[2], "Telescope Ventilation", "", ISS_OFF);
@@ -194,20 +189,19 @@ bool Ipx800_v4::initProperties()
     IUFillSwitchVector(&DigitalInputSP[7], Digital8InputS, 10, getDeviceName(), "DIGITAL_8_CONFIGURATION", "Digital 8", DIGITAL_INPUT_CONFIGURATION_TAB,
                      IP_RW, ISR_1OFMANY, 60, IPS_IDLE);
 
-    //Si l'acces à l'IPX est protégé
-    IUFillText(&LoginPwdT[0], "LOGIN_VAL", "Login", "");
-    IUFillText(&LoginPwdT[1], "PASSWD_VAL", "Password", "");
-    IUFillTextVector(&LoginPwdTP, LoginPwdT, 2, getDeviceName(), "ACCESS_IPX", "IPX Access", OPTIONS_TAB, IP_RW, 0, IPS_IDLE);
-
+    //TO Manage in a next release
+    //IUFillText(&LoginPwdT[0], "LOGIN_VAL", "Login", "");
+    //IUFillText(&LoginPwdT[1], "PASSWD_VAL", "Password", "");
+    //IUFillTextVector(&LoginPwdTP, LoginPwdT, 2, getDeviceName(), "ACCESS_IPX", "IPX Access", OPTIONS_TAB, IP_RW, 0, IPS_IDLE);
+	//defineProperty(&LoginPwdTP);
+	// 
+	
     //enregistrement des onglets de configurations
     for(int i=0;i<8;i++)
     {
         defineProperty(&RelaisInfoSP[i]);
         defineProperty(&DigitalInputSP[i]);
     }
-
-    //champ de gestion du mot de passe
-		defineProperty(&LoginPwdTP);
 
     ///////////////////////////////////////////////
     //Page de presentation de l'état des relais
@@ -297,95 +291,129 @@ bool Ipx800_v4::initProperties()
                      IP_RO,ISR_1OFMANY, 60, IPS_IDLE);
     IUFillSwitchVector(&DigitsStatesSP[7], Digit8StateS, 2, getDeviceName(), "DIGIT_8_STATE", "Digital 8", RAW_DATA_TAB,
                      IP_RO,ISR_1OFMANY, 60, IPS_IDLE);
-	//commentaire dans le code du dome - weather gere dans le driver du watchdog
-	//IDSnoopDevice("Wheather Watcher", "WEATHER_STATUS");
-	//IDSnoopDevice("Telescope", "TELESCOPE_PARK");
-	// gros doute sur le nom de la device "TELESCOPE"
+	
+	// Initialisation des commutateurs ON/OFF
+    IUFillSwitch(&roofEnginePowerS[0], "POWER_ON", "On", ISS_OFF);  // Par défaut sur OFF
+    IUFillSwitch(&roofEnginePowerS[1], "POWER_OFF", "Off", ISS_ON); // Par défaut sur ON
+
+    // Initialisation du vecteur de commutateurs avec ISRVector (type radio)
+    IUFillSwitchVector(&roofEnginePowerSP, roofEnginePowerS, 2, getDeviceName(),
+                           "ROOF_POWER_MNGT",         // Nom interne du vecteur
+                           "Roof Engine Power Mngt",  // Label affiché
+                           "Options",                 // Groupe (onglet Options)
+                           IP_RW,                     // Permissions (lecture/écriture)
+                           ISR_1OFMANY,               // Comportement exclusif (radio buttons)
+                           0,                         // Timeout (si nécessaire, mettre 0 pour ignorer)
+                           IPS_IDLE);                 // État initial (inactif)
+	
+	    // Ajouter la propriété à l'onglet OPTIONS_TAB
+    defineProperty(&roofEnginePowerSP);	
+	
+	// Initialisation des commutateurs ON/OFF
+    IUFillSwitch(&IPXVersionS[0], "VERSION_3", "V3", ISS_OFF);  // Par défaut sur OFF
+    IUFillSwitch(&IPXVersionS[1], "VERSION_4", "V4", ISS_ON); // Par défaut sur ON
+	IUFillSwitch(&IPXVersionS[2], "VERSION_5", "V5", ISS_OFF); // Par défaut sur ON
+
+    // Initialisation du vecteur de commutateurs avec ISRVector (type radio)
+    IUFillSwitchVector(&IPXVersionSP, IPXVersionS, 3, getDeviceName(),
+                           "VERSION_SELECTION",         // Nom interne du vecteur
+                           "IPX800 Version",  			// Label affiché
+                           "Main Control",                 // Groupe (onglet Options)
+                           IP_RO,                     // Permissions (lecture/écriture)
+                           ISR_1OFMANY,               // Comportement exclusif (radio buttons)
+                           0,                         // Timeout (si nécessaire, mettre 0 pour ignorer)
+                           IPS_IDLE);                 // État initial (inactif)
+
+    // Ajouter la propriété à l'onglet OPTIONS_TAB
+    defineProperty(&IPXVersionSP);
+	
 	setDefaultPollingPeriod(2000);
 	
-	//suppression open/close
-	// DON'T WORK
-	//INDI::Dome::deleteProperty(DomeMotionSP.name);
-	//tcpConnection = new Connection::TCP(this);
-    //tcpConnection->registerHandshake([&]() { return Handshake(); });
-    //tcpConnection->establishConnection(Connection::Serial::B_57600);
-    //serialConnection->setDefaultPort("/dev/ttyACM0");
-    //registerConnection(tcpConnection);
-	//
+	tcpConnection = new Connection::TCP(this);
+	tcpConnection->setConnectionType(Connection::TCP::TYPE_TCP);
+	tcpConnection->setDefaultHost("192.168.1.1");
+	tcpConnection->setDefaultPort(666);
+	
+	LOG_DEBUG("Updating Connection - Handshake");
+	tcpConnection->registerHandshake([&]()
+	{
+		LOG_DEBUG("Updating Connection - Call Handshake");
+		return Handshake();
+	}
+	
+	);
+	registerConnection(tcpConnection);	
+		
 	return true;
 }
 
-bool Ipx800_v4::Handshake()
+bool Ipx800::Handshake()
 {
+	bool status = false;
+	bool res = false;
     if (isSimulation())
     {
         LOGF_INFO("Connected successfuly to simulated %s.", getDeviceName());
         return true;
     }
+	else {
+		res = readCommand(GetR);
+		readAnswer();
+		if (res==false) {
+			LOG_ERROR("Handshake with IPX800 failed");
+			return false;
+		}
+		else {
+			LOG_INFO("Handshake with IPX800 successfull");
+			return true;
+		}
+		readAnswer();
+		if (!checkAnswer())
+		{
+				LOG_ERROR("Handshake with IPX800 failed - Wrong answer");
+				res = false;
+		}
+		else {
+				recordData(GetR); 
+		}
+	}		
+    return status;
+}
 
-    // TODO: Any initial communciation needed with our device; we have an active
-    // connection with a valid file descriptor called PortFD. This file descriptor
-    // can be used with the tty_* functions in indicom.h
+void Ipx800::ISGetProperties(const char *dev)
+{
+    INDI::DefaultDevice::ISGetProperties(dev);
+
+}
+
+void ISSnoopDevice(XMLEle *root)
+{
+    ipx800->ISSnoopDevice(root);
+}
+
+bool Ipx800::ISSnoopDevice(XMLEle *root)
+{
+    return INDI::DefaultDevice::ISSnoopDevice(root);
+}
+
+/********************************************************************************************
+** Establish conditions on a connect.
+*********************************************************************************************/
+bool Ipx800::setupParams()
+{	
+    LOG_DEBUG("Setting Params...");
+    updateObsStatus(); 
+
 
     return true;
 }
 
-
-/*
-void Ipx800_v4::ISGetProperties (const char *dev) {
-Ipx800_v4
-	DefaultDevice::ISGetProperties(dev);
-	LOG_DEBUG("ISGetProperties loading....");
-	loadConfig(&DigitalInputSP);
-	loadConfig(&RelaisInfoSP);
-}
-*/
-
-
-bool Ipx800_v4::ISSnoopDevice(XMLEle *root)
+void ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n)
 {
-	/*LOG_INFO("SNOOP...");
-	const char *propName = findXMLAttValu(root, "device");
-	LOGF_DEBUG("Snooping device : %s",propName );
-   */
-    /*if (isConnected())
-    {
-        bool rc = false;
-
-        //rc = updateIPXData();
-        //ssetObsStatus();
-    }*/
-    return INDI::Dome::ISSnoopDevice(root);
+    ipx800->ISNewSwitch(dev, name, states, names, n);
 }
 
-bool Ipx800_v4::SetupParms()
-{
-   LOG_DEBUG("Setting Params...");
-   // If we have parking data
-   if (InitPark())
-    {
-        if (isParked())
-        {
-            fullOpenLimitSwitch   = ISS_OFF;
-            fullClosedLimitSwitch = ISS_ON;
-        }
-        else
-        {
-            fullOpenLimitSwitch   = ISS_ON;
-            fullClosedLimitSwitch = ISS_OFF;
-        }
-    }
-    // If we don't have parking data
-    else
-    {
-        fullOpenLimitSwitch   = ISS_OFF;
-        fullClosedLimitSwitch = ISS_OFF;
-    }
-
-    return true;
-}
-
-bool Ipx800_v4::ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n)
+bool Ipx800::ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n)
 {
     ISwitch *myRelaisInfoS;
     ISwitchVectorProperty myRelaisInfoSP;
@@ -393,54 +421,83 @@ bool Ipx800_v4::ISNewSwitch(const char *dev, const char *name, ISState *states, 
     ISwitch *myDigitalInputS;
     ISwitchVectorProperty myDigitalInputSP;
 
-   // IPXRelaysCommands currentCommands=UNUSED_RELAY;
     int currentRIndex, currentDIndex =0;
     bool infoSet = false;
 	
 	
 	// Make sure the call is for our device, and Fonctions Tab are initialized
-   if(!strcmp(dev,getDeviceName()))
+   if(dev != nullptr && !strcmp(dev,getDeviceName()))
    {
+	   if (INDI::OutputInterface::processSwitch(dev, name, states, names, n))
+            return true;
+		
+		// Vérifie que l'événement concerne le vecteur de commutateurs Roof Engine Power
+        if (strcmp(name, roofEnginePowerSP.name) == 0)
+        {
+            // Parcours des commutateurs pour traiter les changements d'état
+            for (int i = 0; i < n; i++)
+            {
+                if (strcmp(names[i], "POWER_ON") == 0)
+                {
+                    // Si POWER_ON est activé
+                    if (states[i] == ISS_ON)
+                    {
+                        IDMessage(getDeviceName(), "Roof Engine Power: ON");
+                        roofEnginePowerS[0].s = ISS_ON;
+                        roofEnginePowerS[1].s = ISS_OFF;  // Désactive l'autre switch
+						roofPowerManagement = true;
+                    }
+                }
+                else if (strcmp(names[i], "POWER_OFF") == 0)
+                {
+                    // Si POWER_OFF est activé
+                    if (states[i] == ISS_ON)
+                    {
+                        IDMessage(getDeviceName(), "Roof Engine Power: OFF");
+                        roofEnginePowerS[0].s = ISS_OFF;
+                        roofEnginePowerS[1].s = ISS_ON;  // Désactive l'autre switch
+						roofPowerManagement = false;
+                    }
+                }
+            }
+
+            // Marque le vecteur de commutateurs comme mis à jour et notifie l'interface
+            roofEnginePowerSP.s = IPS_OK;
+            IDSetSwitch(&roofEnginePowerSP, nullptr);
+        }
+		
 		for(int i=0;i<8;i++)
 		{
-			myRelaisInfoSP = ipx800v4->getMyRelayVector(i);
-			myDigitalInputSP = ipx800v4->getMyDigitsVector(i);
+			myRelaisInfoSP = ipx800->getMyRelayVector(i);
+			myDigitalInputSP = ipx800->getMyDigitsVector(i);
 			
 			////////////////////////////////////////////////////
 			// Relay Configuration
 			////////////////////////////////////////////////////
+			
+			
 			if (!strcmp(name, myRelaisInfoSP.name))
-				{
-				
-				LOGF_DEBUG("Relay function selected - SP : %s", myRelaisInfoSP.name);
-				//currentRS = IUFindSwitch(&myRelaisInfoSP, myRelaisInfoSP.name);
-				IUUpdateSwitch(&myRelaisInfoSP,states,names,n);
-				
-				myRelaisInfoS = myRelaisInfoSP.sp;
-				myRelaisInfoSP.s = IPS_OK;
-				IDSetSwitch(&myRelaisInfoSP,nullptr);
-				
-				currentRIndex = IUFindOnSwitchIndex(&myRelaisInfoSP);
-				
-				if (currentRIndex != -1) {
-					Relay_Fonction_Tab [currentRIndex] = i;
-					/*if (is_Initialized == true) { */
-				LOGF_DEBUG("Relay fonction index : %d", currentRIndex);
-					//std::strcpy(RelaysStatesSP[i].label,myRelaisInfoS[currentRIndex].label);
-					//LOGF_DEBUG("Relay Label updated : %s", RelaysStatesSP[i].label);
+				{	
+					LOGF_DEBUG("Relay function selected - SP : %s", myRelaisInfoSP.name);
+					IUUpdateSwitch(&myRelaisInfoSP,states,names,n);
 					
-					//defineProperty(&RelaysStatesSP[i]);
-					//IUUpdateSwitch(&RelaysStatesSP[i],states,names,n);
-					//IDSetSwitch(&RelaysStatesSP[i],nullptr);
+					myRelaisInfoS = myRelaisInfoSP.sp;
+					myRelaisInfoSP.s = IPS_OK;
+					IDSetSwitch(&myRelaisInfoSP,nullptr);
 					
-					// store the relay number function 
-					//Relay_Fonction_Tab [currentRIndex] = i;
-					//LOGF_DEBUG("Relay Label Index: %s", i); 
-					defineProperty(&RelaysStatesSP[i]);}
-				else 
-					LOG_DEBUG("No On Switches found"); 
-				
-				infoSet = true;
+					currentRIndex = IUFindOnSwitchIndex(&myRelaisInfoSP);
+					
+					if (currentRIndex != -1) {
+						Relay_Fonction_Tab [currentRIndex] = i;
+						
+						LOGF_DEBUG("Relay fonction index : %d", currentRIndex);
+
+						defineProperty(&RelaysStatesSP[i]);}
+					else 
+						LOG_DEBUG("No On Switches found"); 
+					
+					infoSet = true;
+					return true;
 			}
 				
 			////////////////////////////////////////////////////
@@ -459,108 +516,128 @@ bool Ipx800_v4::ISNewSwitch(const char *dev, const char *name, ISState *states, 
 				currentDIndex = IUFindOnSwitchIndex(&myDigitalInputSP);
 				if (currentDIndex != -1) {
 					Digital_Fonction_Tab [currentDIndex] = i;
-				LOGF_DEBUG("Digital Inp. fonction index : %d", currentDIndex);
-				//std::strcpy(DigitsStatesSP[i].label,myDigitalInputS[currentDIndex].label);
-				//LOGF_DEBUG("Digital Inp Label updated : %s", DigitsStatesSP[i].label);
+					LOGF_DEBUG("Digital Inp. fonction index : %d", currentDIndex);
 					defineProperty(&DigitsStatesSP[i]);
-				// store the function 
+			
 				 }
 				else 
 					LOG_DEBUG("No On Switches found"); 
 				
 				infoSet = true; 
+				return true;
 			}
+			////////////////////////////////////////////////////
+			// Relay Action
+			////////////////////////////////////////////////////
+			if (!strcmp(name, RelaysStatesSP[i].name))
+				{ 
+				LOGF_DEBUG("Relay Modif : %d", i);
+				return true;
+				}
+			
 		}
 		
 		LOG_DEBUG("ISNewSwitch - First Init + UpDate");
-		firstFonctionTabInit();
 		updateIPXData();
-		//first_Start = true;
-	
+			
 		if (infoSet) 
-			setObsStatus();
+			updateObsStatus();
 		
    }
-   return INDI::Dome::ISNewSwitch(dev, name, states, names, n);	
+   return INDI::DefaultDevice::ISNewSwitch(dev, name, states, names, n);	
 
 }
 
+void ISNewText(const char *dev, const char *name, char *texts[], char *names[], int n)
+{
+    ipx800->ISNewText(dev, name, texts, names, n);
+}
 
-bool Ipx800_v4::ISNewText(const char *dev, const char *name, char *texts[], char *names[], int n)
+bool Ipx800::ISNewText(const char *dev, const char *name, char *texts[], char *names[], int n)
 {
     ////////////////////////////////////////////////////
-    // IPX Access
+    // IPX Access - If password protected
+	// To manage in a next release
     ////////////////////////////////////////////////////
-    IText* myLoginT = ipx800v4->getMyLogin();
-    ITextVectorProperty myLoginVector = ipx800v4->getMyLoginVector();
-    if (!strcmp(name, myLoginVector.name))
-    {
+    /*
+	IText* myLoginT = ipx800->getMyLogin();
+    ITextVectorProperty myLoginVector = ipx800->getMyLoginVector();
+    if (dev && !strcmp(name, myLoginVector.name))
+    {	
         IUUpdateText(&myLoginVector, texts, names, n);
         myLoginVector.s = IPS_OK;
         myPasswd = myLoginT[1].text;
         myLogin = myLoginT[0].text;
         IDSetText(&myLoginVector, nullptr);
+		LOG_INFO("Password updated");
      }
-
-    ////////////////////////////////////////////////////
-    // IP Address
-    ////////////////////////////////////////////////////
- /*   IText* myHostAddress = ipx800v4->getText(&Connection::TCP::AddressT[0].text)
-    ITextVectorProperty myLoginVector = ipx800v4->getMyLoginVector();
-
-
-    if (!strcmp(name, myLoginVector.name))
-    {
-        IUUpdateText(&myLoginVector, texts, names, n);
-        myLoginVector.s = IPS_OK;
-        myPasswd = myLoginT[1].text;
-        myLogin = myLoginT[0].text;
-        IDSetText(&myLoginVector, nullptr);
-     }*/
-	return INDI::Dome::ISNewText(dev, name, texts, names, n);
-    //return RollOff::ISNewText(dev, name, texts, names, n);
+	 */
+	 
+	 
+	 if (INDI::InputInterface::processText(dev, name, texts, names, n))
+            return true;
+     if (INDI::OutputInterface::processText(dev, name, texts, names, n))
+            return true;
+	
+    return INDI::DefaultDevice::ISNewText(dev, name, texts, names, n); 
   }
 
-///////////////////////////////////////////
-// When IPX800 is connected two more tabs appear : States of Relays
-//  States of Digitals inputs
-///////////////////////////////////////////
-bool Ipx800_v4::Connect()
+void ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n)
 {
-	INDI::Dome::Connect();
-    //RollOff::Connect();
-	//bool rc2 = firstFonctionTabInit();
-    //bool rc = updateIPXData();
+    ipx800->ISNewNumber(dev, name, values, names, n);
+}
+
+bool Ipx800::ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n)
+{
+    if (dev != nullptr && strcmp(dev, getDeviceName()) == 0)
+		return true;
+
+    return INDI::DefaultDevice::ISNewNumber(dev, name, values, names, n);
+}
+
+///////////////////////////////////////////
+// When IPX800 is connected two more tabs appear : Relays Status
+//  Digital inputs Status
+///////////////////////////////////////////
+bool Ipx800::Connect()
+{
+	bool status = INDI::DefaultDevice::Connect();
+	LOG_DEBUG("Connecting to device...");
+
+    return status;
+    
+}
+
+bool Ipx800::Disconnect()
+{
+    bool status = INDI::DefaultDevice::Disconnect();
 	
-    return true;
+    return status;
 }
 
-bool Ipx800_v4::Disconnect()
+const char *Ipx800::getDefaultName()
 {
-    INDI::Dome::deleteProperty(DomeMotionSP.name);
-    //this->updateProperties();
-    return true;
-}
-
-const char *Ipx800_v4::getDefaultName()
-{
-    return (const char *)"Ipx800 V4";
+    return (const char *)"Ipx800";
 }
 
 /////////////////////////////////////////
-// Used after connection 
-// ** complete ** 
-// ajouter le snoop device
+// Used after connection / Disconnection
 /////////////////////////////////////////
-bool Ipx800_v4::updateProperties()
+bool Ipx800::updateProperties()
 {
-	INDI::Dome::updateProperties();
+	INDI::DefaultDevice::updateProperties();
+	
 	LOG_DEBUG("updateProperties - Starting");
+	///////////////////////////
     if (isConnected())
     { // Connect both states tabs 
 		updateIPXData();
-		firstFonctionTabInit();
-		setObsStatus();
+		//firstFonctionTabInit();
+		//updateObsStatus();
+		INDI::InputInterface::updateProperties();
+		INDI::OutputInterface::updateProperties();
+		defineProperty(&roofEnginePowerSP);
+		defineProperty(&IPXVersionSP);
         for(int i=0;i<8;i++)
         {
             defineProperty(&RelaysStatesSP[i]);
@@ -568,279 +645,83 @@ bool Ipx800_v4::updateProperties()
         }
         for(int i=0;i<8;i++)
         {
-
              defineProperty(&DigitsStatesSP[i]);
         }
-       SetupParms();
-	  
-	   
-	   ///**  Recuperation aux parametres meteo **/
-	   //INDI::Dome::IDSnoopDevice("Weather Watcher", "WEATHER_STATUS");
+	
+        setupParams(); 
+
     }
     else { // Disconnect both "States TAB"
-        for(int i=0;i<8;i++)
+      
+		for(int i=0;i<8;i++)
         {
             deleteProperty(RelaysStatesSP[i].name);
 
         }
         for(int i=0;i<8;i++)
         {
-
              deleteProperty(DigitsStatesSP[i].name);
         }
+		deleteProperty(roofEnginePowerSP.name);
+		deleteProperty(IPXVersionSP.name);
+
     }
-	// snoop present a l'init, ou le mettre --pas necesaire
     return true;
 }
 
 //////////////////////////////////////////
-//
 // ** complete **
 //////////////////////////////////////////
-void Ipx800_v4::TimerHit()
+void Ipx800::TimerHit()
 {
-    if (!isConnected()) {
+  
+    if (!isConnected())  {
         return; //  No need to reset timer if we are not connected anymore
 	}
-	LOG_DEBUG("TimerHit - Starting");
-    if (DomeMotionSP.s == IPS_BUSY)
-    {
-        // Abort called
-        if (MotionRequest < 0)
-        {
-            LOG_INFO("Roof motion is stopped.");
-            setDomeState(DOME_IDLE);
-            SetTimer(DEFAULT_POLLING_TIMER);
-            return;
-        }
-
-        // Roll off is opening
-        if (DomeMotionS[DOME_CW].s == ISS_ON)
-        {
-            if (getFullOpenedLimitSwitch())
-            {
-                LOG_INFO("Roof is open.");
-                SetParked(false);
-                return;
-            }
-        }
-        // Roll Off is closing
-        else if (DomeMotionS[DOME_CCW].s == ISS_ON)
-        {
-            if (getFullClosedLimitSwitch())
-            {
-                LOG_INFO("Roof is closed.");
-                SetParked(true);
-                return;
-            }
-        }
-
-      SetTimer(DEFAULT_POLLING_TIMER);
-    }
-    updateIPXData();
-	firstFonctionTabInit();
-	setObsStatus();
-
-    SetTimer(DEFAULT_POLLING_TIMER);
+	
+	updateIPXData();
+    
+    SetTimer(getPollingPeriod());
 }
 //////////////////////////////////////
 /* Save conf */
-bool Ipx800_v4::saveConfigItems(FILE *fp)
+bool Ipx800::saveConfigItems(FILE *fp)
 {
-	INDI::Dome::saveConfigItems(fp);
-    //RollOff::saveConfigItems(fp);
-    IUSaveConfigText(fp, &LoginPwdTP);
-	/** sauvegarde de la configuration des relais et entrées discretes **/ 
-    for(int i=0;i<8;i++)
-    {
 
+	INDI::DefaultDevice::saveConfigItems(fp);
+    //IUSaveConfigText(fp, &LoginPwdTP);
+	
+	/** sauvegarde de la configuration des relais et entrées discretes **/ 
+    ////////////////////////////
+	for(int i=0;i<8;i++)
+    {
         IUSaveConfigSwitch(fp, &RelaisInfoSP[i]);
         IUSaveConfigSwitch(fp, &DigitalInputSP[i]);
-		//IUSaveConfigSwitch(fp, &RelaysStatesSP[i]);
-		//IUSaveConfigSwitch(fp, &DigitsStatesSP[i]);
     }
-    return true;
-}
-//////////////////////////////////////
-/* Move Roof */
-IPState Ipx800_v4::Move(DomeDirection dir, DomeMotionCommand operation)
-{
-	LOG_DEBUG("MOOOOOOVVVVVE");
-    //LOGF_INFO("direction %s, motion %s",dir, operation);
-	bool rc = false;
-	LOGF_DEBUG("OPERATION : %d", operation);
-	if (operation == MOTION_START)
-    {
-        // no way to choose open or close move, just choose to move
-	/*	if (roof_Status == ROOF_CLOSED && getWeatherState() == IPS_ALERT)
-        {
-            LOG_WARN("Weather conditions are in the danger zone. Cannot open roof.");
-            return IPS_ALERT;
-        }//INDI::RollOff::isLocked()
-        else if (mount_Status != BOTH_PARKED  && RollOff::isLocked())
-        {
-            DEBUG(INDI::Logger::DBG_WARNING,
-                  "Cannot close dome when mount is locking. Telescope not parked, see parking policy, in options tab");
-            return IPS_ALERT;
-        }
-        else if(mount_Status == BOTH_PARKED) {
-            LOG_WARN("Roof is moving");
-            int relayNumber = Relay_Fonction_Tab [ROOF_CONTROL_COMMAND];
-           // isEngineOn = digitalState[Digital_Fonction_Tab[ROOF]];
-            LOGF_DEBUG("Switching On Relay Number %d",relayNumber+1);
-            rc = writeCommand(SetR, relayNumber+1);
-        }
-*/		
-		if (mount_Status != BOTH_PARKED || engine_Powered == false) {
-			LOG_WARN("Roof move cancelled. Mount or Roof's engine not ready");
-			return IPS_ALERT;
-		}
-		else if (mount_Status == BOTH_PARKED && engine_Powered == true) {
-			LOG_WARN("Roof is moving");
-            int relayNumber = Relay_Fonction_Tab [ROOF_CONTROL_COMMAND];
-           // isEngineOn = digitalState[Digital_Fonction_Tab[ROOF]];
-            LOGF_DEBUG("Switching On Relay Number %d",relayNumber+1);
-            rc = writeCommand(SetR, relayNumber+1);
-			//readAnswer();
-		}
-		/**
-		 if (dir == DOME_CW && fullOpenLimitSwitch == ISS_ON)
-		 {
-			LOG_WARN("Roof is already fully opened.");
-			return IPS_ALERT;
-		}
-		else if (dir == DOME_CW && getWeatherState() == IPS_ALERT)
-		{
-			LOG_WARN("Weather conditions are in the danger zone. Cannot open roof.");
-			return IPS_ALERT;
-		}
-		else if (dir == DOME_CCW && fullClosedLimitSwitch == ISS_ON)
-		{
-			LOG_WARN("Roof is already fully closed.");
-			return IPS_ALERT;
-		}
-		else if (dir == DOME_CCW && INDI::Dome::isLocked())
-		{
-			DEBUG(INDI::Logger::DBG_WARNING,
-				  "Cannot close dome when mount is locking. See: Telescope parking policy, in options tab");
-			return IPS_ALERT;
-		}
-		else if(mount_Status == BOTH_PARKED) {
-			int relayNumber = Relay_Fonction_Tab [ROOF_CONTROL_COMMAND];
-           // isEngineOn = digitalState[Digital_Fonction_Tab[ROOF]];
-            LOGF_DEBUG("Switching On Relay Number %d",relayNumber+1);
-            rc = writeCommand(SetR, relayNumber+1);
-		}*/
-		else {
-			LOGF_DEBUG("Move asked dir : %d", dir); 
-		}
-        fullOpenLimitSwitch   = ISS_OFF;
-        fullClosedLimitSwitch = ISS_OFF;
-        MotionRequest         = ROLLOFF_DURATION;
-        gettimeofday(&MotionStart, nullptr);
-        SetTimer(1000); // delai 20 sec
-        return IPS_BUSY;
-	}
-
-    return (INDI::Dome::Abort() ? IPS_OK : IPS_ALERT);
-}
-//////////////////////////////////////
-/* Park Roof */
-IPState Ipx800_v4::Park()
-{
-	IPState rc = INDI::Dome::Move(DOME_CCW, MOTION_START);
-    //IPState rc = RollOff::Move(DOME_CCW, MOTION_START);
-    LOG_INFO("PARKKKKKK");
-    if (rc == IPS_BUSY)
-    {
-        LOG_INFO("Roll off is parking...");
-        return IPS_BUSY;
-    }
-    else
-        return IPS_ALERT;
-}
-////////////////////////////////////
-// Roof be open 
-//
-////////////////////////////////////
-
-IPState Ipx800_v4::UnPark()
-{
-	IPState rc = INDI::Dome::Move(DOME_CW, MOTION_START);
-    //IPState rc = RollOff::Move(DOME_CW, MOTION_START);
-     LOG_INFO("UNNNNNPARKKKKKK");
-    if (rc == IPS_BUSY)
-    {
-        LOG_INFO("Roll off is unparking...");
-        return IPS_BUSY;
-    }
-    else
-        return IPS_ALERT;
-}
-
-//////////////////////////////////////
-/* Emergency stop */
-bool Ipx800_v4::Abort()
-{
-    MotionRequest = -1;
-    bool isEngineOn = false;
-    bool rc = false;
-    int relayNumber = Relay_Fonction_Tab [ROOF_ENGINE_POWER_SUPPLY];
-    isEngineOn = digitalState[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]];
-    
-	if (isEngineOn == false) {
-		LOG_WARN("Roof engine power supply already off."); 
-		return rc;
-	}
-	else { // TO TEST 
-		LOG_WARN("Emergency Stop");
-		LOGF_DEBUG("Switching off Relay Number %d",relayNumber+1);
-		rc = writeCommand(SetR, relayNumber+1);
-		//readAnswer();
-		// If both limit switches are off, then we're neither parked nor unparked.
-		if ((fullOpenLimitSwitch == ISS_OFF && fullClosedLimitSwitch == ISS_OFF) or (mount_Status == UNKNOWN_STATUS))
-		{
-			LOG_DEBUG("Abort -  Idle state");
-			IUResetSwitch(&ParkSP);
-			ParkSP.s = IPS_IDLE;
-			IDSetSwitch(&ParkSP, nullptr);
-		}
-		
-		if (rc == true)
-		{
-			LOG_INFO("Roof Emergency Stop - Roof power supply switched OFF");
-			//rc = INDI::RollOff::Abort();
-			//rc = INDI::Dome::Abort();
-			rc = updateIPXData(); //update digitals inputs and relays states
-			firstFonctionTabInit();
-			setObsStatus();
-		}
-		return rc; 
-	}
+	INDI::InputInterface::saveConfigItems(fp);
+    INDI::OutputInterface::saveConfigItems(fp);
+    return true;////////
 }
 
 //////////////////////////////////////
 /* readCommand */
-bool Ipx800_v4::readCommand(IPX800_command rCommand) {
+bool Ipx800::readCommand(IPX800_command rCommand) {
 
     bool rc = false;
     std::string ipx_url = "";
     //int bytesWritten = 0, totalBytes = 0;
     switch (rCommand) {
-    case GetR :
-        ipx_url = "Get=R";
-        LOG_DEBUG ("readCommand - Sending Get R...");
-        break;
-    case GetD :
-        ipx_url = "Get=D";
-        LOG_DEBUG ("readCommand - Sending Get D...");
-        break;
-    default :
-    {
-        LOGF_ERROR("readCommand - Unknown Command %s", rCommand);
-        return false;
-    }
-	
+		case GetR :
+			ipx_url = "Get=R";
+			break;
+		case GetD :
+			ipx_url = "Get=D";
+			break;
+		default :
+		{
+			LOGF_ERROR("readCommand - Unknown Command %s", rCommand);
+			return false;
+		}
     }
     LOGF_DEBUG ("readCommand - Sending %s",ipx_url.c_str());
     rc = writeTCP(ipx_url);
@@ -850,10 +731,12 @@ bool Ipx800_v4::readCommand(IPX800_command rCommand) {
 
 //////////////////////////////////////
 /* writeCommand */
-bool Ipx800_v4::writeCommand(IPX800_command wCommand, int toSet) {
+bool Ipx800::writeCommand(IPX800_command wCommand, int toSet) {
 
     std::string ipx_url;
     std::string number;
+	
+	
     bool rc = false;
     //int bytesWritten = 0, totalBytes = 0;
     if (toSet <10)
@@ -862,28 +745,29 @@ bool Ipx800_v4::writeCommand(IPX800_command wCommand, int toSet) {
         number = std::to_string(toSet);
     }
     switch (wCommand) {
-    case SetR :
-        ipx_url = "SetR=" + number ;
-        LOGF_DEBUG ("Sending Set R %s",number.c_str());
-        break;
-    case ClearR :
-        ipx_url = "ClearR="+number;
-        LOGF_DEBUG ("Sending Clear R %s",number.c_str());
-        break;
-    default :
-    {
-        LOGF_ERROR("Unknown Command %s", wCommand);
-        return false;
-    }
+		case SetR :
+			ipx_url = "SetR=" + number ;
+			LOGF_DEBUG ("Sending Set R %s",number.c_str());
+			break;
+		case ClearR :
+			ipx_url = "ClearR=" + number;
+			LOGF_DEBUG ("Sending Clear R %s",number.c_str());
+			break;
+		default :
+		{
+			LOGF_ERROR("Unknown Command %s", wCommand);
+			return false;
+		}
 
     }
-    rc = writeTCP(ipx_url);
-	readAnswer();
+    rc = writeTCP(ipx_url); 
+	
     return rc;
 };
-
-// Lit sur le port TCP la reponse a une requete GetR ou GetD sous forme de buffer
-void Ipx800_v4::readAnswer(){
+//////////////////////////////////////
+/* readAnswer */
+// TCP Answer reading 
+void Ipx800::readAnswer(){
     int received = 0;
     int bytes, total = 0;
     int portFD = tcpConnection->getPortFD();
@@ -894,8 +778,8 @@ void Ipx800_v4::readAnswer(){
         bytes = read(portFD,tmp+received,total-received);
 
         if (bytes < 0) {
-            LOGF_ERROR("readAnswer - ERROR reading response from socket %s", strerror(errno));
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            LOGF_ERROR("readAnswer - ERROR reading response from socket : %s", strerror(errno));
+            //std::this_thread::sleep_for(std::chrono::milliseconds(500));
 			i++;
 			if (i>2)
 				break;
@@ -916,26 +800,33 @@ void Ipx800_v4::readAnswer(){
 
 //////////////////////////////////////
 /* recordData */
-void Ipx800_v4::recordData(IPX800_command recCommand) {
-    int tmpDNumber, i = -1;
+void Ipx800::recordData(IPX800_command recCommand) {
+    int i = -1;
 	int tmpDR = UNUSED_DIGIT;
 	switch (recCommand) {
     case GetD :
-			for (i=0;i<8;i++){
+			for (i=0;i<8;i++){				
 				DigitsStatesSP[i].s = IPS_OK;
+				DigitalInputsSP[i].reset();
 				if (tmpAnswer[i] == '0') {
 					LOGF_DEBUG("recordData - Digital Input N° %d is %s",i+1,"OFF");
+					DigitalInputsSP[i][0].setState(ISS_ON);
 					DigitsStatesSP[i].sp[0].s = ISS_OFF;
 					DigitsStatesSP[i].sp[1].s = ISS_ON;
 					digitalState[i] = false;}
 				else if(tmpAnswer[i] == '1'){
 					LOGF_DEBUG("recordData - Digital Input N° %d is %s",i+1,"ON");
-					DigitsStatesSP[i].sp[0].s  = ISS_ON;
+					DigitalInputsSP[i][1].setState(ISS_ON);
+					DigitsStatesSP[i].sp[0].s = ISS_ON ;
 					DigitsStatesSP[i].sp[1].s = ISS_OFF;
 					digitalState[i] = true;
 				}
 				tmpAnswer[i] = ' ';
-			defineProperty(&DigitsStatesSP[i]);
+			    DigitalInputsSP[i].setState(IPS_OK);
+                DigitalInputsSP[i].apply();
+			    defineProperty(&DigitsStatesSP[i]);
+				DigitsStatesSP[i].s = IPS_OK;
+				IDSetSwitch(&DigitsStatesSP[i], nullptr);
 			}
 			
 			for (i=0;i<10;i++) {
@@ -947,26 +838,41 @@ void Ipx800_v4::recordData(IPX800_command recCommand) {
 							LOG_DEBUG("recordData - inverting ROOF_ENGINE_POWERED TO ON");
 							DigitsStatesSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]].sp[0].s  = ISS_ON;
 							DigitsStatesSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]].sp[1].s = ISS_OFF;
-							digitalState[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]] = true; }
+							digitalState[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]] = true;
+							DigitalInputsSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]][0].setState(ISS_ON);}
 						else {
 							LOG_DEBUG("recordData - inverting ROOF_ENGINE_POWERED TO OFF");
 							DigitsStatesSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]].sp[0].s = ISS_OFF;
 							DigitsStatesSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]].sp[1].s = ISS_ON;
-							digitalState[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]] = false;}
+							digitalState[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]] = false;
+							DigitalInputsSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]][1].setState(ISS_ON);}
+						
+						
+						DigitalInputsSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]].setState(IPS_OK);
+						DigitalInputsSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]].apply();		
 						defineProperty(&DigitsStatesSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]]);
+						DigitsStatesSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]].s = IPS_OK;
+						IDSetSwitch(&DigitsStatesSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]], nullptr);
 					}
 					else if(tmpDR == RASPBERRY_SUPPLIED) {
 						if (DigitsStatesSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]].sp[0].s == ISS_OFF) {
 							LOG_DEBUG("recordData - inverting RASPBERRY_SUPPLIED TO ON");
 							DigitsStatesSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]].sp[0].s  = ISS_ON;
 							DigitsStatesSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]].sp[1].s = ISS_OFF;
-							digitalState[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]] = true; }
+							digitalState[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]] = true;
+							DigitalInputsSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]][0].setState(ISS_ON);}
 						else {
 							LOG_DEBUG("recordData - inverting RASPBERRY_SUPPLIED TO OFF");
 							DigitsStatesSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]].sp[0].s = ISS_OFF;
 							DigitsStatesSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]].sp[1].s = ISS_ON;
-							digitalState[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]] = false;}
+							digitalState[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]] = false;
+							DigitalInputsSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]][1].setState(ISS_ON);}
+							
+						DigitalInputsSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]].setState(IPS_OK);
+						DigitalInputsSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]].apply();	
 						defineProperty(&DigitsStatesSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]]);
+						DigitsStatesSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]].s = IPS_OK;
+						IDSetSwitch(&DigitsStatesSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]], nullptr);
 					}
 					else if (tmpDR == MAIN_PC_SUPPLIED) { 
 						if (DigitsStatesSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]].sp[0].s == ISS_OFF) {
@@ -979,34 +885,47 @@ void Ipx800_v4::recordData(IPX800_command recCommand) {
 							DigitsStatesSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]].sp[0].s = ISS_OFF;
 							DigitsStatesSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]].sp[1].s = ISS_ON;
 							digitalState[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]] = false;}
+						
+						DigitalInputsSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]].setState(IPS_OK);
+						DigitalInputsSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]].apply();	
 						defineProperty(&DigitsStatesSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]]);
+						DigitsStatesSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]].s = IPS_OK;
+						IDSetSwitch(&DigitsStatesSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]], nullptr);
 					}
 				}
 				else {
 					LOGF_WARN("Wrong Digital ROOF_ENGINE_POWERED initialisation. Now it's = %d",tmpDR);
 				}
+
+		enginePowered = digitalState[Digital_Fonction_Tab [ROOF_ENGINE_POWERED]];
 			}
-			
-			 
 		break;
     case GetR :
         for (int i=0;i<8;i++){
             RelaysStatesSP[i].s = IPS_OK;
+			DigitalOutputsSP[i].reset();
             if (tmpAnswer[i] == '0') {
                 LOGF_DEBUG("recordData - Relay N° %d is %s",i+1,"OFF");
                 RelaysStatesSP[i].sp[0].s = ISS_OFF;
                 RelaysStatesSP[i].sp[1].s = ISS_ON;
-                relayState[i]= false;
-
+				DigitalOutputsSP[i][0].setState(ISS_ON);
+                //relayState[i]= false;
             }
             else {
                 LOGF_DEBUG("recordData - Relay N° %d is %s",i+1,"ON");
                 RelaysStatesSP[i].sp[0].s  = ISS_ON;
                 RelaysStatesSP[i].sp[1].s  = ISS_OFF;
-                relayState[i]=true;
+				DigitalOutputsSP[i][1].setState(ISS_ON);
+                //relayState[i]=true;
             }
             tmpAnswer[i] = ' ';
-			defineProperty(&RelaysStatesSP[i]);
+			DigitalOutputsSP[i].setState(IPS_OK);
+            DigitalOutputsSP[i].apply();
+			RelaysStatesSP[i].s = IPS_OK;
+			
+			IDSetSwitch(&RelaysStatesSP[i], nullptr);
+			//defineProperty(&RelaysStatesSP[i]);
+			
         }
         break;
     default :
@@ -1019,8 +938,8 @@ void Ipx800_v4::recordData(IPX800_command recCommand) {
 };
 
 //////////////////////////////////////
-/* writeTCP */
-bool Ipx800_v4::writeTCP(std::string toSend) {
+/* writeTCP Write Command on TCP socket */
+bool Ipx800::writeTCP(std::string toSend) {
 
     int bytesWritten = 0, totalBytes = 0;
     totalBytes = toSend.length();
@@ -1032,114 +951,134 @@ bool Ipx800_v4::writeTCP(std::string toSend) {
     if (!isSimulation()) {
         while (bytesWritten < totalBytes)
         {
-            int bytesSent = write(portFD, toSend.c_str(), totalBytes - bytesWritten);
+			int bytesSent = write(portFD, toSend.c_str(), totalBytes - bytesWritten);
             if (bytesSent >= 0)
                 bytesWritten += bytesSent;
+				
             else
             {
-                LOGF_ERROR("writeTCP - Error writing to IPX800 v4. %s", strerror(errno));
+                LOGF_ERROR("writeTCP - Error request to IPX800. %s", strerror(errno));
                 return false;
             }
         }
     }
 
-    LOGF_DEBUG ("writeTCP - octets à envoyer : %s", toSend.c_str());
-    LOGF_DEBUG ("writeTCP - Nombre d'octets envoyé : %d", bytesWritten);
+    LOGF_DEBUG ("writeTCP - bytes to send : %s", toSend.c_str());
+    LOGF_DEBUG ("writeTCP - Number of bytes sent : %d", bytesWritten);
     return true;
 }
 
-float Ipx800_v4::CalcTimeLeft(timeval start)
+bool Ipx800::getFullClosedLimitSwitch(bool* switchState)
 {
-    double timesince;
-    double timeleft;
-    struct timeval now { 0, 0 };
-    gettimeofday(&now, nullptr);
-
-    timesince =
-        (double)(now.tv_sec * 1000.0 + now.tv_usec / 1000) - (double)(start.tv_sec * 1000.0 + start.tv_usec / 1000);
-    timesince = timesince / 1000;
-    timeleft  = MotionRequest - timesince;
-    return timeleft;
-}
-//////////////////////////////////////
-/* getFullOpenedLimitSwitch */
-bool Ipx800_v4::getFullOpenedLimitSwitch()
-{
-    double timeleft = CalcTimeLeft(MotionStart);
-	//setObsStatus();
-	
-    if (timeleft <= 0 && roof_Status == ROOF_IS_OPENED)
+    if (isSimulation())
     {
-        fullOpenLimitSwitch = ISS_ON;
+        if (simRoofClosed)
+        {
+            fullyClosedLimitSwitch = ISS_ON;
+            *switchState = true;
+        }
+        else
+        {
+            fullyClosedLimitSwitch = ISS_OFF;
+            *switchState = false;
+        }
+        return true;
+    }
+
+    if (readRoofSwitch(ROOF_CLOSED_SWITCH, switchState))
+    {
+        if (*switchState)
+            fullyClosedLimitSwitch = ISS_ON;
+        else
+            fullyClosedLimitSwitch = ISS_OFF;
         return true;
     }
     else
+    {
+        LOG_WARN("Unable to obtain from the controller whether or not the roof is closed");
         return false;
+    }
 }
+
+*/
 //////////////////////////////////////
-/* getFullClosedLimitSwitch */
-
-bool Ipx800_v4::getFullClosedLimitSwitch()
-{
-    double timeleft = CalcTimeLeft(MotionStart);
-	//setObsStatus();
+// readRoofSwitch
+/*
+ * If unable to determine switch state due to errors, return false.
+ * If no errors return true. Return in result true if switch and false if switch off.
+ */
+bool Ipx800::readRoofSwitch(const int roofSwitchId, bool *result)
+{   
+	/*
+    bool status;
+	// TODO modifier le type de roofswitchid (entier c'est mieux)
+	// ecrire comparason roofswitchid vs roof_stauts
+	if ( roofSwitchId == roof_Status)
+		return true;
+	else 
+		return false; 
+    //Roof Status definition
+	int openedRoof = Digital_Fonction_Tab [ROOF_OPENED];
+	int closedRoof =  Digital_Fonction_Tab [ROOF_CLOSED];
+	LOGF_DEBUG("updateObsStatus - Roof openedRoof %d", digitalState[openedRoof]);
+	LOGF_DEBUG("updateObsStatus - Roof closedRoof %d", digitalState[closedRoof]);
+	if (digitalState[openedRoof] && !digitalState[closedRoof]) {
+		roof_Status = ROOF_IS_OPENED;
+	}
+	else if (!digitalState[openedRoof] && digitalState[closedRoof]) {
+		roof_Status = ROOF_IS_CLOSED; 
+	}
+	*/
+	return result;
 	
-    if (timeleft <= 0 && roof_Status == ROOF_IS_CLOSED)
-    {	
-
-        fullClosedLimitSwitch = ISS_ON;
-        return true;
-    }
-    else
-        return false;
 }
-
 
 //////////////////////////////////////
 /* updateIPXData */
-
-bool Ipx800_v4::updateIPXData()
+/* prepare commands to update Inputs Status */
+//////////////////////////////////////
+bool Ipx800::updateIPXData()
 {
     bool res = false;
 	LOG_INFO("Updating IPX Data...");
-    res = readCommand(GetR);
-    if (res==false)
+	
+    res = UpdateDigitalOutputs();
+    if (res==false) {
         LOG_ERROR("updateIPXData - Send Command GetR failed");
-    else {
-        LOG_INFO("updateIPXData - Send Command GetR successfull");
-        readAnswer();
-        if (!checkAnswer()) {
-            LOG_ERROR("updateIPXData - Wrong Command GetR send");
-            res = false;
-        }
-        else {
-            recordData(GetR);
-        }
-    }
-    if (res == false)
-            return res;
-    res = readCommand(GetD);
+		return false;
+	}
+   
+    res = UpdateDigitalInputs();
     if (res==false) {
         LOG_ERROR("updateIPXData - Send Command GetD failed");
+		return false;
     }
-    else {
-        LOG_INFO("updateIPXData - Send Command GetD successfull");
-        readAnswer();
-        if (!checkAnswer())
-        {
-            LOG_ERROR("updateIPXData - Wrong Command GetD send");
-            res = false;
-        }
-        else {
-            recordData(GetD); }
-    }
-    return res;
+  
+    return true;
 }
 
 //////////////////////////////////////
-/* setObsStatus */
-void Ipx800_v4::setObsStatus()
+/* updateObsStatus */
+void Ipx800::updateObsStatus()
 {
+	bool openedState = false;
+    bool closedState = false;
+
+  //  getFullOpenedLimitSwitch(&openedState);
+   // getFullClosedLimitSwitch(&closedState);
+	/*
+	if (!openedState && !closedState && !roofOpening && !roofClosing) {
+        DEBUG(INDI::Logger::DBG_WARNING, "Roof stationary, neither opened or closed, adjust to match PARK button");
+    }
+	if (openedState && closedState) {
+        DEBUG(INDI::Logger::DBG_WARNING, "Roof showing it is both opened and closed according to the controller");
+	}
+	
+	RoofStatusL[ROOF_STATUS_OPENED].s = IPS_IDLE;
+    RoofStatusL[ROOF_STATUS_CLOSED].s = IPS_IDLE;
+    RoofStatusL[ROOF_STATUS_MOVING].s = IPS_IDLE;
+    RoofStatusLP.s = IPS_IDLE;
+	
     if (isConnected()) {
 		LOG_INFO("Updating observatory status ...");
 		//Mount STATUS definition
@@ -1156,49 +1095,76 @@ void Ipx800_v4::setObsStatus()
 		else {
 			mount_Status = NONE_PARKED;
 		}
-		LOGF_DEBUG("setObsStatus - Dec Axis input  %d", DecAxis);
-		LOGF_DEBUG("setObsStatus - Ra Axis input  %d", RaAxis);
-		LOGF_DEBUG("setObsStatus - Dec Axis status  %d", digitalState[DecAxis]);
-		LOGF_DEBUG("setObsStatus - Ra Axis status  %d", digitalState[RaAxis]);
-		LOGF_DEBUG("setObsStatus - Mount Status %d", mount_Status);
+		LOGF_DEBUG("updateObsStatus - Dec Axis input  %d", DecAxis);
+		LOGF_DEBUG("updateObsStatus - Ra Axis input  %d", RaAxis);
+		LOGF_DEBUG("updateObsStatus - Dec Axis status  %d", digitalState[DecAxis]);
+		LOGF_DEBUG("updateObsStatus - Ra Axis status  %d", digitalState[RaAxis]);
+		LOGF_DEBUG("updateObsStatus - Mount Status %d", mount_Status);
 
 		//Roof Status definition
 		int openedRoof = Digital_Fonction_Tab [ROOF_OPENED];
 		int closedRoof =  Digital_Fonction_Tab [ROOF_CLOSED];
-		LOGF_DEBUG("setObsStatus - Roof openedRoof %d", digitalState[openedRoof]);
-		LOGF_DEBUG("setObsStatus - Roof closedRoof %d", digitalState[closedRoof]);
+		LOGF_DEBUG("updateObsStatus - Roof openedRoof %d", digitalState[openedRoof]);
+		LOGF_DEBUG("updateObsStatus - Roof closedRoof %d", digitalState[closedRoof]);
 		if (digitalState[openedRoof] && !digitalState[closedRoof]) {
 			roof_Status = ROOF_IS_OPENED;
-			setDomeState(DOME_UNPARKED);
+			RoofStatusL[ROOF_STATUS_OPENED].s = IPS_OK;
+			RoofStatusLP.s = IPS_OK;
+			roofOpening = false;
+			//setDomeState(DOME_UNPARKED);
 			LOG_INFO("Roof is Open.");
 		}
 		else if (!digitalState[openedRoof] && digitalState[closedRoof]) {
 			roof_Status = ROOF_IS_CLOSED; 
-			setDomeState(DOME_PARKED);
-			LOG_INFO("Roof is Closed.");}
+			//setDomeState(DOME_PARKED);
+			roofClosing = false;
+            RoofStatusL[ROOF_STATUS_CLOSED].s = IPS_OK;
+            RoofStatusLP.s = IPS_OK;
+			LOG_INFO("Roof is Closed.");
+		}
+		else if (roofOpening || roofClosing) {
+			
+            if (roofOpening)
+            {
+                RoofStatusL[ROOF_STATUS_OPENED].s = IPS_BUSY;
+                RoofStatusL[ROOF_STATUS_MOVING].s = IPS_BUSY;
+            }
+            else if (roofClosing)
+            {
+                RoofStatusL[ROOF_STATUS_CLOSED].s = IPS_BUSY;
+                RoofStatusL[ROOF_STATUS_MOVING].s = IPS_BUSY;
+            }
+            RoofStatusLP.s = IPS_BUSY;
+        }
 		else {
 			LOG_ERROR("Roof status unknown !");
 			roof_Status = UNKNOWN_STATUS;
+			if (roofTimedOut == EXPIRED_OPEN)
+                RoofStatusL[ROOF_STATUS_OPENED].s = IPS_ALERT;
+            else if (roofTimedOut == EXPIRED_CLOSE)
+                RoofStatusL[ROOF_STATUS_CLOSED].s = IPS_ALERT;
+            RoofStatusLP.s = IPS_ALERT;
 		}
 		int tPower = Digital_Fonction_Tab [ROOF_ENGINE_POWERED];
 		// Roof Engine status
-		LOGF_DEBUG("setObsStatus - Roof engine input : %d", tPower+1); 
+		LOGF_DEBUG("updateObsStatus - Roof engine input : %d", tPower+1); 
 		//tPower = tPower +1;
 		engine_Powered = digitalState[tPower];
 		
-		LOGF_DEBUG("setObsStatus - Roof Engine is (0 : Off, 1 : On) : %d", engine_Powered);
+		LOGF_DEBUG("updateObsStatus - Roof Engine is (0 : Off, 1 : On) : %d", engine_Powered);
 		
-		LOGF_DEBUG("setObsStatus - Roof Status %d", roof_Status);
+		LOGF_DEBUG("updateObsStatus - Roof Status %d", roof_Status);
 	}
+	IDSetLight(&RoofStatusLP, nullptr); */
 }
 
 //////////////////////////////////////
 /* randomInit */
-bool Ipx800_v4::firstFonctionTabInit()
+bool Ipx800::firstFonctionTabInit()
 {
 	int currentDIndex = -1;
 	int currentRIndex = -1;
-	int cptD, cptR =0;
+	//int cptD, cptR =0;
 	for(int i=0;i<8;i++)
 	{
 		currentRIndex = IUFindOnSwitchIndex(&RelaisInfoSP[i]);
@@ -1223,15 +1189,13 @@ bool Ipx800_v4::firstFonctionTabInit()
 		else
 			LOGF_DEBUG("firstFonctionTabInit - Function unknown for Digital Input %d", i+1);
 	}
-	//if (cptR != 0 && cptD != 0)
-		//is_Initialized = true;
 	
 	return true;
 }	
 
 //////////////////////////////////////
 /* checkAnswer */
-bool Ipx800_v4::checkAnswer()
+bool Ipx800::checkAnswer()
 {
     for (int i=0;i<8;i++)
     {
@@ -1247,34 +1211,110 @@ bool Ipx800_v4::checkAnswer()
 
     return true;
 }
-///////////////////////////////////////////////////////////
-// A developper via connexion aag_cloudwatcher
-///////////////////////////////////////////////////////////
-IPState Ipx800_v4::getWeatherState()
-{
-	IPState weatherStatus = IPS_BUSY;
-	weatherStatus = IPS_OK; 
-	return weatherStatus;
-} 
- 
-
-IText* Ipx800_v4::getMyLogin()
+/*
+Password Management for a next release
+IText* Ipx800::getMyLogin()
 {
     return LoginPwdT;
 }
 
-ITextVectorProperty Ipx800_v4::getMyLoginVector()
+ITextVectorProperty Ipx800::getMyLoginVector()
 {
      return LoginPwdTP;
 }
+*/
 
-ISwitchVectorProperty Ipx800_v4::getMyRelayVector(int i)
+ISwitchVectorProperty Ipx800::getMyRelayVector(int i)
 {
      return RelaisInfoSP[i];
 }
 
-ISwitchVectorProperty Ipx800_v4::getMyDigitsVector(int i)
+ISwitchVectorProperty Ipx800::getMyDigitsVector(int i)
 {
      return DigitalInputSP[i];
 }
 
+
+//////////////////////////////////////
+/* UpdateDigitalInputs */
+bool Ipx800::UpdateDigitalInputs() 
+{	
+	// update of all digital inputs
+	bool res = readCommand(GetD);
+	readAnswer();
+	if (res==false) {
+		LOG_ERROR("UpdateDigitalInputs - Send Command GetD failed");
+		return res;
+		}
+	else {
+		LOG_INFO("UpdateDigitalInputs - Send Command GetD successfull");
+		
+		if (!checkAnswer())
+		{
+			LOG_ERROR("UpdateDigitalInputs - Wrong Command GetD send");
+			res = false;
+		}
+		else {
+			recordData(GetD); 
+		}
+	}
+	return true; 
+}
+
+bool Ipx800::UpdateAnalogInputs()
+{
+	return true;
+}
+
+//////////////////////////////////////
+/* UpdateDigitalOutputs */
+// Update Relays Status
+bool Ipx800::UpdateDigitalOutputs()
+{
+			// update of all digital inputs
+		bool res = readCommand(GetR);
+		readAnswer();
+		if (res==false) {
+			LOG_ERROR("UpdateDigitalOutputs - Send Command GetR failed");
+			
+			return res;
+			}
+		else {
+			LOG_INFO("UpdateDigitalOutputs - Send Command GetR successfull");
+			
+			if (!checkAnswer())
+			{
+				LOG_ERROR("UpdateDigitalOutputs - Wrong Command GetR send");
+				res = false;
+			}
+			else {
+				recordData(GetR); 
+			}
+		}
+		return true;
+}
+
+//////////////////////////////////////
+/* CommandOutput */
+//  
+bool Ipx800::CommandOutput(uint32_t index, OutputState command) 
+{
+	//check index is controling enginepower
+	int relayNumber = index+1;
+	bool rc = false;
+	//modifier pour permettre l'emission de commande pour toutes les commandes....sans lien avec le moteur
+	if (roofPowerManagement && enginePowered==false && static_cast<uint32_t>(Relay_Fonction_Tab[ROOF_CONTROL_COMMAND])==static_cast<uint32_t>(index)) {
+		LOG_WARN("Please switch on roof engine power");
+		return false; }
+	else {
+		if (command ==  INDI::OutputInterface::On) 
+			rc = writeCommand(SetR, relayNumber);
+		else
+			rc = writeCommand(ClearR, relayNumber);
+			
+		readAnswer(); 
+		
+		return rc;
+	}
+		
+}

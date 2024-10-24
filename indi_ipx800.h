@@ -1,77 +1,79 @@
 /*******************************************************************************
-This file is part of the IPX800 V4 INDI Driver.
-A driver for the IPX800 (AAGware - http : //www.aagware.eu/)
+This file is part of the IPX800 INDI Driver.
+A driver for the IPX800 (GCE Electronics - https://www.gce-electronics.com)
 
-Copyright (C) 2022 Arnaud Dupont (aknotwot@protonmail.com)
+Copyright (C) 2024 Arnaud Dupont (aknotwot@protonmail.com)
 
-IPX800 V4 INDI Driver is free software : you can redistribute it
-and / or modify it under the terms of the GNU General Public License as
+IPX800 INDI Driver is free software : you can redistribute it
+and / or modify it under the terms of the GNU Lesser General Public License as
 published by the Free Software Foundation, either version 3 of the License,
 or (at your option) any later version.
 
-IPX800 V4  INDI Driver is distributed in the hope that it will be
+IPX800 INDI Driver is distributed in the hope that it will be
 useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
-along with IPX800 V4  INDI Driver.  If not, see
+You should have received a copy of the GNU Lesser General Public License
+along with IPX800 INDI Driver.  If not, see
 < http : //www.gnu.org/licenses/>.
 
 *******************************************************************************/
 #pragma once
 
-#include "indidome.h"
+#include "defaultdevice.h"
+#include <indioutputinterface.h>
+#include <indiinputinterface.h>
+#include <indidevapi.h>
+#include <indiapi.h>
  
-class Ipx800_v4 : public INDI::Dome
+class Ipx800 : public INDI::DefaultDevice, public INDI::InputInterface, public INDI::OutputInterface
  
 {
   public:
   
-	Ipx800_v4();
-    virtual ~Ipx800_v4() = default;
+	Ipx800();
+    virtual ~Ipx800() override = default;
 	
 	virtual bool initProperties() override;
-	bool updateProperties() override;
-	bool Handshake();
-	virtual const char *getDefaultName() override;
-    virtual bool ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n) override;
-    virtual bool ISNewText(const char *dev, const char *name, char *texts[], char *names[], int n) override;
-    //virtual bool ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n) override;
-	virtual bool saveConfigItems(FILE *fp) override;
-    virtual bool ISSnoopDevice(XMLEle *root) override;
-   
-    
-
-  protected:
-
-	//const char *getDefaultName();
+	virtual bool updateProperties() override;
+	const char *getDefaultName() override;
 	
+	virtual bool ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n) override;
+    virtual bool ISNewText(const char *dev, const char *name, char *texts[], char *names[], int n) override;
+    virtual bool ISNewNumber(const char *dev,const char *name,double values[],char *names[],int n) override;
+	   
+	//TO CONFIRM
+	
+    virtual bool ISSnoopDevice(XMLEle *root) override;
+    virtual void ISGetProperties(const char *dev) ;
+ protected:
+	
+	bool Handshake();
 	bool Connect() override;
     bool Disconnect() override;
 	void TimerHit() override;
 
-    virtual IPState Move(DomeDirection dir, DomeMotionCommand operation) override;
-    virtual IPState Park() override;
-    virtual IPState UnPark() override;
-    virtual bool Abort() override; 
-	virtual bool getFullOpenedLimitSwitch();
-    virtual bool getFullClosedLimitSwitch();
-
+    //virtual IPState Move(DomeDirection dir, DomeMotionCommand operation) override;
+    //virtual IPState Park() override;
+    //virtual IPState UnPark() override;
+    //virtual bool Abort() override; 
+	//virtual bool getFullOpenedLimitSwitch(bool*);
+    //virtual bool getFullClosedLimitSwitch(bool*);
+	virtual bool readRoofSwitch(const int roofSwitchId, bool* result);
+	
     enum IPX800_command {
        GetR   = 1 << 0,
        GetD  = 1 << 1,
        SetR = 1 << 2,
        ClearR = 1 << 3
    } ;
-   
-
-    
+       
 	///////////////////////////////////////////
 	// IPX800 Communication
 	///////////////////////////////////////////
 	bool updateIPXData();
-    void setObsStatus();
+    void updateObsStatus();
     bool readCommand(IPX800_command);
     bool writeCommand(IPX800_command, int toSet);
     bool checkAnswer();
@@ -79,13 +81,22 @@ class Ipx800_v4 : public INDI::Dome
     void recordData(IPX800_command command);
     bool writeTCP(std::string toSend);
 	bool firstFonctionTabInit();
-	IPState getWeatherState();
-
+	
+    virtual bool UpdateDigitalInputs() override;
+    virtual bool UpdateAnalogInputs() override; // IPX800 Analog Inputs not managed
+    virtual bool UpdateDigitalOutputs() override;
+    virtual bool CommandOutput(uint32_t index, OutputState command) override;
+	virtual bool saveConfigItems(FILE *fp) override;
+	
   private:
-  
-	IText* getMyLogin();
-    ITextVectorProperty getMyLoginVector();
-    ISwitchVectorProperty getMyRelayVector(int i);
+	bool roofPowerManagement = false;
+	Connection::TCP *tcpConnection {nullptr};
+	
+	// TO manage Password in a next release
+	//IText* getMyLogin();
+    //ITextVectorProperty getMyLoginVector();
+    
+	ISwitchVectorProperty getMyRelayVector(int i);
     ISwitchVectorProperty getMyDigitsVector(int i);
 	
 	// List of possible commands 
@@ -117,7 +128,7 @@ class Ipx800_v4 : public INDI::Dome
         OTHER_DIGITAL_2 } IPXDigitalRead;
 	
     char tmpAnswer[8]= {0};
-    bool SetupParms();
+    bool setupParams();
     float CalcTimeLeft(timeval);
 
     ISState fullOpenLimitSwitch { ISS_ON };
@@ -138,9 +149,11 @@ class Ipx800_v4 : public INDI::Dome
     ISwitch Digit1StateS[2],Digit2StateS[2],Digit3StateS[2],Digit4StateS[2],Digit5StateS[2],Digit6StateS[2],Digit7StateS[2],Digit8StateS[2] ;
     ISwitchVectorProperty DigitsStatesSP[8] ;
 
-    //Gestion Acces IPX
-    IText LoginPwdT[2];
-    ITextVectorProperty LoginPwdTP;
+    //TO manage Password in a next release
+    //IText LoginPwdT[2];
+    //ITextVectorProperty LoginPwdTP;
+	//std::string myPasswd = "";
+    //std::string myLogin = "";
 
     enum {
         ROOF_IS_OPENED ,
@@ -159,8 +172,12 @@ class Ipx800_v4 : public INDI::Dome
 
 	const char *ROLLOFF_TAB        = "Roll Off";
 	const char *RELAYS_CONFIGURATION_TAB        = "Relays Outputs";
-	const char *DIGITAL_INPUT_CONFIGURATION_TAB        = "Digitals Inputs";
+	const char *DIGITAL_INPUT_CONFIGURATION_TAB        = "Digital Inputs";
 	const char *RAW_DATA_TAB = "Status";
+
+	const int DIGITAL_INTPUTS = 8;
+	const int RELAYS_OUTPUTS = 8;
+
 
     // Relay_Fonction_Tab provide relay output in charge of the function
     // fonctions are ordered arbitrarly as following. 
@@ -183,7 +200,7 @@ class Ipx800_v4 : public INDI::Dome
     // fonctions are ordered arbitrarly as following. 
 	// Only 8 functions applicable - only 8 digital inputs on IPX800
 	// Others are spares
-int Digital_Fonction_Tab [11] = {0};
+	int Digital_Fonction_Tab [11] = {0};
     /*
        0:  UNUSED_DIGIT,
         DEC_AXIS_PARKED,
@@ -204,10 +221,12 @@ int Digital_Fonction_Tab [11] = {0};
 	
     int mount_Status = RA_PARKED | DEC_PARKED | BOTH_PARKED | NONE_PARKED;
     int roof_Status  = ROOF_IS_OPENED | ROOF_IS_CLOSED | UNKNOWN_STATUS;
-	bool engine_Powered = false ; //  True = on / false = Off 
+	bool enginePowered = false ; //  True = on / false = Off 
 	bool first_Start = false;
 	
-    std::string myPasswd = "";
-    std::string myLogin = "";
-
+	ISwitch IPXVersionS[5];
+	ISwitch roofEnginePowerS[2];
+	ISwitchVectorProperty IPXVersionSP, roofEnginePowerSP;
+	
+	
 };
