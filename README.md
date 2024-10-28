@@ -2,7 +2,8 @@
 Driver INDI for IPX800 domotic server
 Tested only with V4
 Requirements : 
-- Needs M2M activated without header 
+- Needs M2M activated without header
+- To use with "Universal ROR" Dome driver 
 Limitations :
 - Works only for IPX800 V4, V3 and V5 commands to implement
 - no management of analoagic input
