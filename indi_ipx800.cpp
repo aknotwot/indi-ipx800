@@ -52,7 +52,7 @@ User can select, partially, for this first release, how IPX 800 is configured
 #include <arpa/inet.h>
 #include <unistd.h>
 
-#define ROLLOFF_DURATION 30 // 30 seconds until roof is fully opened or closed
+
 #define DEFAULT_POLLING_TIMER 2000
 
 // Read only
@@ -327,7 +327,7 @@ bool Ipx800::initProperties()
     // Ajouter la propriété à l'onglet OPTIONS_TAB
     defineProperty(&IPXVersionSP);
 	
-	setDefaultPollingPeriod(2000);
+	setDefaultPollingPeriod(DEFAULT_POLLING_TIMER);
 	
 	tcpConnection = new Connection::TCP(this);
 	tcpConnection->setConnectionType(Connection::TCP::TYPE_TCP);
@@ -785,7 +785,7 @@ void Ipx800::readAnswer(){
 				break;
 			}
         else if (bytes == 0) {
-            LOG_INFO("readAnswer : end of stream");
+            LOG_DEBUG("readAnswer : end of stream");
             break; }
         received+=bytes;
     } while (received < total);
@@ -834,18 +834,20 @@ void Ipx800::recordData(IPX800_command recCommand) {
 				if (tmpDR >= 0) {
 					 
 					if (tmpDR == ROOF_ENGINE_POWERED ) {
+						DigitalInputsSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]].reset();
 						if (DigitsStatesSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]].sp[0].s == ISS_OFF) {
 							LOG_DEBUG("recordData - inverting ROOF_ENGINE_POWERED TO ON");
+							
 							DigitsStatesSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]].sp[0].s  = ISS_ON;
 							DigitsStatesSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]].sp[1].s = ISS_OFF;
 							digitalState[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]] = true;
-							DigitalInputsSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]][0].setState(ISS_ON);}
+							DigitalInputsSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]][1].setState(ISS_ON);}
 						else {
 							LOG_DEBUG("recordData - inverting ROOF_ENGINE_POWERED TO OFF");
 							DigitsStatesSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]].sp[0].s = ISS_OFF;
 							DigitsStatesSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]].sp[1].s = ISS_ON;
 							digitalState[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]] = false;
-							DigitalInputsSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]][1].setState(ISS_ON);}
+							DigitalInputsSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]][0].setState(ISS_ON);}
 						
 						
 						DigitalInputsSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]].setState(IPS_OK);
@@ -853,44 +855,51 @@ void Ipx800::recordData(IPX800_command recCommand) {
 						defineProperty(&DigitsStatesSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]]);
 						DigitsStatesSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]].s = IPS_OK;
 						IDSetSwitch(&DigitsStatesSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]], nullptr);
+						
 					}
 					else if(tmpDR == RASPBERRY_SUPPLIED) {
+						DigitalInputsSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]].reset();
 						if (DigitsStatesSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]].sp[0].s == ISS_OFF) {
 							LOG_DEBUG("recordData - inverting RASPBERRY_SUPPLIED TO ON");
 							DigitsStatesSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]].sp[0].s  = ISS_ON;
 							DigitsStatesSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]].sp[1].s = ISS_OFF;
 							digitalState[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]] = true;
-							DigitalInputsSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]][0].setState(ISS_ON);}
+							DigitalInputsSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]][1].setState(ISS_ON);}
 						else {
 							LOG_DEBUG("recordData - inverting RASPBERRY_SUPPLIED TO OFF");
 							DigitsStatesSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]].sp[0].s = ISS_OFF;
 							DigitsStatesSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]].sp[1].s = ISS_ON;
 							digitalState[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]] = false;
-							DigitalInputsSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]][1].setState(ISS_ON);}
+							DigitalInputsSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]][0].setState(ISS_ON);}
 							
 						DigitalInputsSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]].setState(IPS_OK);
 						DigitalInputsSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]].apply();	
 						defineProperty(&DigitsStatesSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]]);
 						DigitsStatesSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]].s = IPS_OK;
 						IDSetSwitch(&DigitsStatesSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]], nullptr);
+						
 					}
-					else if (tmpDR == MAIN_PC_SUPPLIED) { 
+					else if (tmpDR == MAIN_PC_SUPPLIED) {
+						DigitalInputsSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]].reset();						
 						if (DigitsStatesSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]].sp[0].s == ISS_OFF) {
 							LOG_DEBUG("recordData - inverting MAIN_PC_SUPPLIED TO ON");
 							DigitsStatesSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]].sp[0].s  = ISS_ON;
 							DigitsStatesSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]].sp[1].s = ISS_OFF;
-							digitalState[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]] = true; }
+							digitalState[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]] = true; 
+							DigitalInputsSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]][1].setState(ISS_ON);}
 						else {
 							LOG_DEBUG("recordData - inverting MAIN_PC_SUPPLIED TO OFF");
 							DigitsStatesSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]].sp[0].s = ISS_OFF;
 							DigitsStatesSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]].sp[1].s = ISS_ON;
-							digitalState[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]] = false;}
+							digitalState[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]] = false;
+							DigitalInputsSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]][0].setState(ISS_ON);}
 						
 						DigitalInputsSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]].setState(IPS_OK);
 						DigitalInputsSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]].apply();	
 						defineProperty(&DigitsStatesSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]]);
 						DigitsStatesSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]].s = IPS_OK;
 						IDSetSwitch(&DigitsStatesSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]], nullptr);
+					
 					}
 				}
 				else {
@@ -968,70 +977,7 @@ bool Ipx800::writeTCP(std::string toSend) {
     return true;
 }
 
-bool Ipx800::getFullClosedLimitSwitch(bool* switchState)
-{
-    if (isSimulation())
-    {
-        if (simRoofClosed)
-        {
-            fullyClosedLimitSwitch = ISS_ON;
-            *switchState = true;
-        }
-        else
-        {
-            fullyClosedLimitSwitch = ISS_OFF;
-            *switchState = false;
-        }
-        return true;
-    }
 
-    if (readRoofSwitch(ROOF_CLOSED_SWITCH, switchState))
-    {
-        if (*switchState)
-            fullyClosedLimitSwitch = ISS_ON;
-        else
-            fullyClosedLimitSwitch = ISS_OFF;
-        return true;
-    }
-    else
-    {
-        LOG_WARN("Unable to obtain from the controller whether or not the roof is closed");
-        return false;
-    }
-}
-
-*/
-//////////////////////////////////////
-// readRoofSwitch
-/*
- * If unable to determine switch state due to errors, return false.
- * If no errors return true. Return in result true if switch and false if switch off.
- */
-bool Ipx800::readRoofSwitch(const int roofSwitchId, bool *result)
-{   
-	/*
-    bool status;
-	// TODO modifier le type de roofswitchid (entier c'est mieux)
-	// ecrire comparason roofswitchid vs roof_stauts
-	if ( roofSwitchId == roof_Status)
-		return true;
-	else 
-		return false; 
-    //Roof Status definition
-	int openedRoof = Digital_Fonction_Tab [ROOF_OPENED];
-	int closedRoof =  Digital_Fonction_Tab [ROOF_CLOSED];
-	LOGF_DEBUG("updateObsStatus - Roof openedRoof %d", digitalState[openedRoof]);
-	LOGF_DEBUG("updateObsStatus - Roof closedRoof %d", digitalState[closedRoof]);
-	if (digitalState[openedRoof] && !digitalState[closedRoof]) {
-		roof_Status = ROOF_IS_OPENED;
-	}
-	else if (!digitalState[openedRoof] && digitalState[closedRoof]) {
-		roof_Status = ROOF_IS_CLOSED; 
-	}
-	*/
-	return result;
-	
-}
 
 //////////////////////////////////////
 /* updateIPXData */
@@ -1040,7 +986,7 @@ bool Ipx800::readRoofSwitch(const int roofSwitchId, bool *result)
 bool Ipx800::updateIPXData()
 {
     bool res = false;
-	LOG_INFO("Updating IPX Data...");
+	LOG_DEBUG("Updating IPX Data...");
 	
     res = UpdateDigitalOutputs();
     if (res==false) {
@@ -1061,101 +1007,7 @@ bool Ipx800::updateIPXData()
 /* updateObsStatus */
 void Ipx800::updateObsStatus()
 {
-	bool openedState = false;
-    bool closedState = false;
-
-  //  getFullOpenedLimitSwitch(&openedState);
-   // getFullClosedLimitSwitch(&closedState);
-	/*
-	if (!openedState && !closedState && !roofOpening && !roofClosing) {
-        DEBUG(INDI::Logger::DBG_WARNING, "Roof stationary, neither opened or closed, adjust to match PARK button");
-    }
-	if (openedState && closedState) {
-        DEBUG(INDI::Logger::DBG_WARNING, "Roof showing it is both opened and closed according to the controller");
-	}
 	
-	RoofStatusL[ROOF_STATUS_OPENED].s = IPS_IDLE;
-    RoofStatusL[ROOF_STATUS_CLOSED].s = IPS_IDLE;
-    RoofStatusL[ROOF_STATUS_MOVING].s = IPS_IDLE;
-    RoofStatusLP.s = IPS_IDLE;
-	
-    if (isConnected()) {
-		LOG_INFO("Updating observatory status ...");
-		//Mount STATUS definition
-		// DecAxis RaAxis are digit input number to use
-		int DecAxis = Digital_Fonction_Tab [DEC_AXIS_PARKED];
-		int RaAxis =  Digital_Fonction_Tab [RA_AXIS_PARKED];
-		
-		if (digitalState[DecAxis] && digitalState[RaAxis])
-			mount_Status = BOTH_PARKED;
-		else if (digitalState[DecAxis] && !digitalState[RaAxis]) {
-			mount_Status = DEC_PARKED; }
-		else if (digitalState[RaAxis] && !digitalState[DecAxis])
-			mount_Status = RA_PARKED;
-		else {
-			mount_Status = NONE_PARKED;
-		}
-		LOGF_DEBUG("updateObsStatus - Dec Axis input  %d", DecAxis);
-		LOGF_DEBUG("updateObsStatus - Ra Axis input  %d", RaAxis);
-		LOGF_DEBUG("updateObsStatus - Dec Axis status  %d", digitalState[DecAxis]);
-		LOGF_DEBUG("updateObsStatus - Ra Axis status  %d", digitalState[RaAxis]);
-		LOGF_DEBUG("updateObsStatus - Mount Status %d", mount_Status);
-
-		//Roof Status definition
-		int openedRoof = Digital_Fonction_Tab [ROOF_OPENED];
-		int closedRoof =  Digital_Fonction_Tab [ROOF_CLOSED];
-		LOGF_DEBUG("updateObsStatus - Roof openedRoof %d", digitalState[openedRoof]);
-		LOGF_DEBUG("updateObsStatus - Roof closedRoof %d", digitalState[closedRoof]);
-		if (digitalState[openedRoof] && !digitalState[closedRoof]) {
-			roof_Status = ROOF_IS_OPENED;
-			RoofStatusL[ROOF_STATUS_OPENED].s = IPS_OK;
-			RoofStatusLP.s = IPS_OK;
-			roofOpening = false;
-			//setDomeState(DOME_UNPARKED);
-			LOG_INFO("Roof is Open.");
-		}
-		else if (!digitalState[openedRoof] && digitalState[closedRoof]) {
-			roof_Status = ROOF_IS_CLOSED; 
-			//setDomeState(DOME_PARKED);
-			roofClosing = false;
-            RoofStatusL[ROOF_STATUS_CLOSED].s = IPS_OK;
-            RoofStatusLP.s = IPS_OK;
-			LOG_INFO("Roof is Closed.");
-		}
-		else if (roofOpening || roofClosing) {
-			
-            if (roofOpening)
-            {
-                RoofStatusL[ROOF_STATUS_OPENED].s = IPS_BUSY;
-                RoofStatusL[ROOF_STATUS_MOVING].s = IPS_BUSY;
-            }
-            else if (roofClosing)
-            {
-                RoofStatusL[ROOF_STATUS_CLOSED].s = IPS_BUSY;
-                RoofStatusL[ROOF_STATUS_MOVING].s = IPS_BUSY;
-            }
-            RoofStatusLP.s = IPS_BUSY;
-        }
-		else {
-			LOG_ERROR("Roof status unknown !");
-			roof_Status = UNKNOWN_STATUS;
-			if (roofTimedOut == EXPIRED_OPEN)
-                RoofStatusL[ROOF_STATUS_OPENED].s = IPS_ALERT;
-            else if (roofTimedOut == EXPIRED_CLOSE)
-                RoofStatusL[ROOF_STATUS_CLOSED].s = IPS_ALERT;
-            RoofStatusLP.s = IPS_ALERT;
-		}
-		int tPower = Digital_Fonction_Tab [ROOF_ENGINE_POWERED];
-		// Roof Engine status
-		LOGF_DEBUG("updateObsStatus - Roof engine input : %d", tPower+1); 
-		//tPower = tPower +1;
-		engine_Powered = digitalState[tPower];
-		
-		LOGF_DEBUG("updateObsStatus - Roof Engine is (0 : Off, 1 : On) : %d", engine_Powered);
-		
-		LOGF_DEBUG("updateObsStatus - Roof Status %d", roof_Status);
-	}
-	IDSetLight(&RoofStatusLP, nullptr); */
 }
 
 //////////////////////////////////////
@@ -1247,7 +1099,7 @@ bool Ipx800::UpdateDigitalInputs()
 		return res;
 		}
 	else {
-		LOG_INFO("UpdateDigitalInputs - Send Command GetD successfull");
+		LOG_DEBUG("UpdateDigitalInputs - Send Command GetD successfull");
 		
 		if (!checkAnswer())
 		{
@@ -1280,7 +1132,7 @@ bool Ipx800::UpdateDigitalOutputs()
 			return res;
 			}
 		else {
-			LOG_INFO("UpdateDigitalOutputs - Send Command GetR successfull");
+			LOG_DEBUG("UpdateDigitalOutputs - Send Command GetR successfull");
 			
 			if (!checkAnswer())
 			{
