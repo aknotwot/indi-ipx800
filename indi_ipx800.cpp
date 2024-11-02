@@ -233,21 +233,21 @@ bool Ipx800::initProperties()
         IUFillSwitch(&Relay8StateS[i], name, nameM, ISS_OFF);
     }
     IUFillSwitchVector(&RelaysStatesSP[0], Relay1StateS, 2, getDeviceName(), "RELAY_1_STATE", "Relay 1", RAW_DATA_TAB,
-                     IP_RW,ISR_1OFMANY, 60, IPS_IDLE);
+                     IP_RO,ISR_1OFMANY, 60, IPS_IDLE);
     IUFillSwitchVector(&RelaysStatesSP[1], Relay2StateS, 2, getDeviceName(), "RELAY_2_STATE", "Relay 2", RAW_DATA_TAB,
-                     IP_RW,ISR_1OFMANY, 60, IPS_IDLE);
+                     IP_RO,ISR_1OFMANY, 60, IPS_IDLE);
     IUFillSwitchVector(&RelaysStatesSP[2], Relay3StateS, 2, getDeviceName(), "RELAY_3_STATE", "Relay 3", RAW_DATA_TAB,
-                     IP_RW,ISR_1OFMANY, 60, IPS_IDLE);
+                     IP_RO,ISR_1OFMANY, 60, IPS_IDLE);
     IUFillSwitchVector(&RelaysStatesSP[3], Relay4StateS, 2, getDeviceName(), "RELAY_4_STATE", "Relay 4", RAW_DATA_TAB,
-                     IP_RW,ISR_1OFMANY, 60, IPS_IDLE);
+                     IP_RO,ISR_1OFMANY, 60, IPS_IDLE);
     IUFillSwitchVector(&RelaysStatesSP[4], Relay5StateS, 2, getDeviceName(), "RELAY_5_STATE", "Relay 5", RAW_DATA_TAB,
-                     IP_RW,ISR_1OFMANY, 60, IPS_IDLE);
+                     IP_RO,ISR_1OFMANY, 60, IPS_IDLE);
     IUFillSwitchVector(&RelaysStatesSP[5], Relay6StateS, 2, getDeviceName(), "RELAY_6_STATE", "Relay 6", RAW_DATA_TAB,
-                     IP_RW,ISR_1OFMANY, 60, IPS_IDLE);
+                     IP_RO,ISR_1OFMANY, 60, IPS_IDLE);
     IUFillSwitchVector(&RelaysStatesSP[6], Relay7StateS, 2, getDeviceName(), "RELAY_7_STATE", "Relay 7", RAW_DATA_TAB,
-                     IP_RW,ISR_1OFMANY, 60, IPS_IDLE);
+                     IP_RO,ISR_1OFMANY, 60, IPS_IDLE);
     IUFillSwitchVector(&RelaysStatesSP[7], Relay8StateS, 2, getDeviceName(), "RELAY_8_STATE", "Relay 8", RAW_DATA_TAB,
-                     IP_RW,ISR_1OFMANY, 60, IPS_IDLE);
+                     IP_RO,ISR_1OFMANY, 60, IPS_IDLE);
 					 
     //////////////////////////////////////////////////////////
     //page de presentation de l'état des entrées discretes
@@ -431,7 +431,7 @@ bool Ipx800::ISNewSwitch(const char *dev, const char *name, ISState *states, cha
 	   if (INDI::OutputInterface::processSwitch(dev, name, states, names, n))
             return true;
 		
-		// Vérifie que l'événement concerne le vecteur de commutateurs Roof Engine Power
+		// Vérifie que l'événement concerne le vecteur de commutateurs Roof Engine Power Management - Options Tab
         if (strcmp(name, roofEnginePowerSP.name) == 0)
         {
             // Parcours des commutateurs pour traiter les changements d'état
@@ -442,7 +442,7 @@ bool Ipx800::ISNewSwitch(const char *dev, const char *name, ISState *states, cha
                     // Si POWER_ON est activé
                     if (states[i] == ISS_ON)
                     {
-                        IDMessage(getDeviceName(), "Roof Engine Power: ON");
+                        IDMessage(getDeviceName(), "Roof Engine Power Management: ON");
                         roofEnginePowerS[0].s = ISS_ON;
                         roofEnginePowerS[1].s = ISS_OFF;  // Désactive l'autre switch
 						roofPowerManagement = true;
@@ -453,7 +453,7 @@ bool Ipx800::ISNewSwitch(const char *dev, const char *name, ISState *states, cha
                     // Si POWER_OFF est activé
                     if (states[i] == ISS_ON)
                     {
-                        IDMessage(getDeviceName(), "Roof Engine Power: OFF");
+                        IDMessage(getDeviceName(), "Roof Engine Power Management: OFF");
                         roofEnginePowerS[0].s = ISS_OFF;
                         roofEnginePowerS[1].s = ISS_ON;  // Désactive l'autre switch
 						roofPowerManagement = false;
@@ -526,15 +526,7 @@ bool Ipx800::ISNewSwitch(const char *dev, const char *name, ISState *states, cha
 				infoSet = true; 
 				return true;
 			}
-			////////////////////////////////////////////////////
-			// Relay Action
-			////////////////////////////////////////////////////
-			if (!strcmp(name, RelaysStatesSP[i].name))
-				{ 
-				LOGF_DEBUG("Relay Modif : %d", i);
-				return true;
-				}
-			
+
 		}
 		
 		LOG_DEBUG("ISNewSwitch - First Init + UpDate");
@@ -1148,7 +1140,7 @@ bool Ipx800::UpdateDigitalOutputs()
 
 //////////////////////////////////////
 /* CommandOutput */
-//  
+// 
 bool Ipx800::CommandOutput(uint32_t index, OutputState command) 
 {
 	//check index is controling enginepower
@@ -1163,9 +1155,7 @@ bool Ipx800::CommandOutput(uint32_t index, OutputState command)
 			rc = writeCommand(SetR, relayNumber);
 		else
 			rc = writeCommand(ClearR, relayNumber);
-			
 		readAnswer(); 
-		
 		return rc;
 	}
 		
