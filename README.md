@@ -5,7 +5,7 @@ Requirements :
 - Needs M2M activated without header
 - To use with "Universal ROR" Dome driver 
 Limitations :
-- Works only for IPX800 V4, V3 and V5 commands to implement
+- Works only for IPX800 V4. V3 and V5 commands to implement
 - no management of analogic input
 - ROOF_ENGINE_POWERED, RASPBERRY_SUPPLIED, MAIN_PC_SUPPLIED logic's is reversed
 
@@ -22,3 +22,4 @@ First Use :
 - Selection in "options" Tab if you want to manage roof power,
 - Tab Status, and InputsOutputs show the same data.
 - You can change Relay State on "InputsOutputs" Tab.
+
