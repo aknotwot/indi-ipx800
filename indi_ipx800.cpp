@@ -828,14 +828,14 @@ void Ipx800::recordData(IPX800_command recCommand) {
 					if (tmpDR == ROOF_ENGINE_POWERED ) {
 						DigitalInputsSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]].reset();
 						if (DigitsStatesSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]].sp[0].s == ISS_OFF) {
-							LOG_DEBUG("recordData - inverting ROOF_ENGINE_POWERED TO ON");
+							LOG_DEBUG("recordData - reversing ROOF_ENGINE_POWERED TO ON");
 							
 							DigitsStatesSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]].sp[0].s  = ISS_ON;
 							DigitsStatesSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]].sp[1].s = ISS_OFF;
 							digitalState[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]] = true;
 							DigitalInputsSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]][1].setState(ISS_ON);}
 						else {
-							LOG_DEBUG("recordData - inverting ROOF_ENGINE_POWERED TO OFF");
+							LOG_DEBUG("recordData - reversing ROOF_ENGINE_POWERED TO OFF");
 							DigitsStatesSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]].sp[0].s = ISS_OFF;
 							DigitsStatesSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]].sp[1].s = ISS_ON;
 							digitalState[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]] = false;
@@ -850,15 +850,15 @@ void Ipx800::recordData(IPX800_command recCommand) {
 						
 					}
 					else if(tmpDR == RASPBERRY_SUPPLIED) {
-						DigitalInputsSP[Digital_Fonction_Tab[ROOF_ENGINE_POWERED]].reset();
+						DigitalInputsSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]].reset();
 						if (DigitsStatesSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]].sp[0].s == ISS_OFF) {
-							LOG_DEBUG("recordData - inverting RASPBERRY_SUPPLIED TO ON");
+							LOG_DEBUG("recordData - reversing RASPBERRY_SUPPLIED TO ON");
 							DigitsStatesSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]].sp[0].s  = ISS_ON;
 							DigitsStatesSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]].sp[1].s = ISS_OFF;
 							digitalState[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]] = true;
 							DigitalInputsSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]][1].setState(ISS_ON);}
 						else {
-							LOG_DEBUG("recordData - inverting RASPBERRY_SUPPLIED TO OFF");
+							LOG_DEBUG("recordData - reversing RASPBERRY_SUPPLIED TO OFF");
 							DigitsStatesSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]].sp[0].s = ISS_OFF;
 							DigitsStatesSP[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]].sp[1].s = ISS_ON;
 							digitalState[Digital_Fonction_Tab[RASPBERRY_SUPPLIED]] = false;
@@ -874,13 +874,13 @@ void Ipx800::recordData(IPX800_command recCommand) {
 					else if (tmpDR == MAIN_PC_SUPPLIED) {
 						DigitalInputsSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]].reset();						
 						if (DigitsStatesSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]].sp[0].s == ISS_OFF) {
-							LOG_DEBUG("recordData - inverting MAIN_PC_SUPPLIED TO ON");
+							LOG_DEBUG("recordData - reversing MAIN_PC_SUPPLIED TO ON");
 							DigitsStatesSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]].sp[0].s  = ISS_ON;
 							DigitsStatesSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]].sp[1].s = ISS_OFF;
 							digitalState[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]] = true; 
 							DigitalInputsSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]][1].setState(ISS_ON);}
 						else {
-							LOG_DEBUG("recordData - inverting MAIN_PC_SUPPLIED TO OFF");
+							LOG_DEBUG("recordData - reversing MAIN_PC_SUPPLIED TO OFF");
 							DigitsStatesSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]].sp[0].s = ISS_OFF;
 							DigitsStatesSP[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]].sp[1].s = ISS_ON;
 							digitalState[Digital_Fonction_Tab[MAIN_PC_SUPPLIED]] = false;

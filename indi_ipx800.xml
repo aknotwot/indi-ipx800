@@ -3,7 +3,7 @@
 <devGroup group="Auxiliary">
 	<device label="IPX800" manufacturer="GCE">
                 <driver name="IPX800">indi_ipx800</driver>
-                <version>0.5</version>
+                <version>@CDRIVER_VERSION_MAJOR@.@CDRIVER_VERSION_MINOR@</version>
 	</device>
 </devGroup>
 </driversList>
